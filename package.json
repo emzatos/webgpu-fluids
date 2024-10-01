@@ -11,5 +11,10 @@
   "devDependencies": {
     "typescript": "^5.5.3",
     "vite": "^5.4.1"
+  },
+  "dependencies": {
+    "@webgpu/types": "^0.1.47",
+    "webgpu-matrix": "^1.0.0",
+    "webgpu-utils": "^1.9.3"
   }
 }
