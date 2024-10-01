@@ -1,42 +1,10 @@
-struct OurStruct {
-    color: vec4f,
-    offset: vec2f
-};
-
-struct OtherStruct {
-    scale: vec2f,
-};
-
-struct Vertex {
-    position: vec2f
-};
-
-struct VSOutput {
-    @builtin(position) position: vec4f,
-    @location(0) color: vec4f
-}
-
-@group(0) @binding(0) var<storage, read> ourStructs: array<OurStruct>;
-@group(0) @binding(1) var<storage, read> otherStructs: array<OtherStruct>;
-@group(0) @binding(2) var<storage, read> pos: array<Vertex>;
 
 @vertex fn vs (
-    @builtin(vertex_index) vertexIndex : u32,
-    @builtin(instance_index) instanceIndex : u32
-) -> VSOutput {
-
-    let ourStruct = ourStructs[instanceIndex];
-    let otherStruct = otherStructs[instanceIndex];
-
-    var vsOut: VSOutput;
-    vsOut.position = vec4f(
-        pos[vertexIndex].position * otherStruct.scale + ourStruct.offset, 0.0, 1.0
-    );
-    vsOut.color = ourStruct.color;
-
-    return vsOut;
+    @builtin(vertex_index) vertexIndex : u32
+) -> @builtin(position) vec4f {
+    return vec4(1.0, 0.0, 0.0, 1.0);
 }
 
-@fragment fn fs(out: VSOutput) -> @location(0) vec4f { 
-    return out.color;
+@fragment fn fs() -> @location(0) vec4f { 
+    return vec4(1.0, 0.0, 0.0, 1.0);
 }
