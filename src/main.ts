@@ -1,5 +1,6 @@
 import { f32, struct, u32 } from "typegpu/data/index";
 import shaders from "./shaders.wgsl?raw";
+import computeShaders from "./computeShaders.wgsl?raw";
 import './style.css'
 import tgpu from 'typegpu'
 
@@ -21,22 +22,36 @@ async function main() {
     format: presentationFormat,
   });
 
-  const module = device.createShaderModule({
+  // shaders and pipeline
+  const renderModule = device.createShaderModule({
     label: "Shaders for triablge",
-    code: shaders,
+    code: shaders
   });
 
-  const pipeline = device.createRenderPipeline({
+  const computeModule = device.createShaderModule({
+    label: 'Compute texture shaders',
+    code: computeShaders
+  });
+
+  const renderPipeline = device.createRenderPipeline({
     label: 'render pipeling',
     layout: 'auto',
     vertex: {
-      module
+      module: renderModule,
     },
     fragment: {
-      module,
+      module: renderModule,
       targets: [{ format: presentationFormat }]
     }
   });
+
+  const computePipeline = device.createComputePipeline({
+    label: 'compute pipeline',
+    layout: 'auto',
+    compute: {
+      module: computeModule
+    }
+  })
 
   const renderPassDescriptor = {
     label: 'render pass diescript',
@@ -50,15 +65,19 @@ async function main() {
     ]
   } satisfies GPURenderPassDescriptor;
 
+  const computePassDescriptor = {
+    'label': 'Compute Pass Descriptor',
+  } satisfies GPUComputePassDescriptor;
+
   // TGPU Types
   const Uniforms = struct({
-    fun: f32
+    fun: f32,
+    time: f32
   });
 
   // Texture creation
 
-
-  const textureSize = 64;
+  const textureSize = 128;
   const textureData = new Float32Array({ length: textureSize * textureSize }).map(() => Math.random());
   const texture = device.createTexture({
     'label': 'storage texture',
@@ -78,12 +97,18 @@ async function main() {
   });
 
   const uniforms = tgpu.createBuffer(Uniforms, {
-    fun: Math.random()
+    fun: Math.random(),
+    time: performance.now()
   }).$device(device)
     .$usage(tgpu.Uniform);
 
-  const bindGroup = device.createBindGroup({
-    layout: pipeline.getBindGroupLayout(0),
+  const computeUniforms = tgpu.createBuffer(Uniforms, {
+    fun: Math.PI,
+    time: performance.now()
+  }).$device(device).$usage(tgpu.Uniform);
+
+  const renderBindGroup = device.createBindGroup({
+    layout: renderPipeline.getBindGroupLayout(0),
     entries: [{
       binding: 0,
       resource: texture.createView()
@@ -98,6 +123,24 @@ async function main() {
     }
     ]
   });
+
+  const computeBindGroup = device.createBindGroup({
+    layout: computePipeline.getBindGroupLayout(0),
+    entries: [
+      {
+        binding: 2,
+        resource: computeUniforms
+      },
+      {
+        binding: 0,
+        resource: texture.createView()
+      },
+      {
+        binding: 1,
+        resource: sampler
+      },
+    ]
+  })
 
 
   const canvasToSizeMap = new WeakMap();
@@ -120,10 +163,19 @@ async function main() {
     resizeCanvasToDisplaySize(canvas);
     renderPassDescriptor.colorAttachments[0].view = context.getCurrentTexture().createView();
     const encoder = device?.createCommandEncoder({ label: 'commandendocoer' });
+    const computePass = encoder?.beginComputePass(computePassDescriptor);
+    computePass?.setPipeline(computePipeline);
+    computePass?.setBindGroup(0, computeBindGroup);
+    tgpu.write(computeUniforms, {
+      fun: Math.PI,
+      time: performance.now() / 200
+    })
+    computePass?.dispatchWorkgroups(textureSize / 8, textureSize / 8);
+    computePass?.end();
+
     const pass = encoder?.beginRenderPass(renderPassDescriptor);
-    pass?.setPipeline(pipeline);
-    pass?.setBindGroup(0, bindGroup);
-    tgpu.write(uniforms, { fun: Math.random() })
+    pass?.setPipeline(renderPipeline);
+    pass?.setBindGroup(0, renderBindGroup);
     pass?.draw(6);
     pass?.end();
 

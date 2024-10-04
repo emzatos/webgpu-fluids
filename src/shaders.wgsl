@@ -1,7 +1,6 @@
-
-
 struct Uniforms {
-    fun: f32
+    fun: f32,
+    time: f32
 }
 struct VertexOutput {
     @builtin(position) position: vec4f,
