@@ -66,7 +66,7 @@ async function main() {
   } satisfies GPURenderPassDescriptor;
 
   const computePassDescriptor = {
-    'label': 'Compute Pass Descriptor',
+    'label': 'Compute Pass Descriptor'
   } satisfies GPUComputePassDescriptor;
 
   // TGPU Types
