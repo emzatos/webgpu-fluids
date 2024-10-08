@@ -13,7 +13,7 @@ struct Uniforms {
     @builtin(global_invocation_id) glob : vec3<u32>,
 ) {
     _ = samp;
-    let value = vec4f(sin(f32(glob.x) * uniforms.fun + uniforms.time) * cos(0.2 * uniforms.fun + uniforms.time * f32(glob.y)));
+    let value = vec4f(sin(f32(glob.x) * 0.01 * uniforms.fun + uniforms.time) * cos(0.2 * uniforms.fun + uniforms.time * f32(glob.y) * 0.01));
     textureStore(tex, glob.xy, value);
 }
 

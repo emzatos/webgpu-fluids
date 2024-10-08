@@ -38,6 +38,7 @@ struct VertexOutput {
 }
 
 @fragment fn fs(vin: VertexOutput) -> @location(0) vec4f { 
-    return uniforms.fun * textureSample(tex, samp, vec2f(vin.uv));
+    _ = uniforms;
+    return 1.1 * textureSample(tex, samp, vec2f(vin.uv));
     
 }
