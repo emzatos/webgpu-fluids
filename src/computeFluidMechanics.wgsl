@@ -18,7 +18,10 @@ struct Uniforms {
 ) {
     let x = glob.x;
     let y = glob.y;
-    if (x >= uniforms.grid_size || y >= uniforms.grid_size) {
+    if (x == 0 || y == 0) {
+        return;
+    }
+    if (x > uniforms.grid_size || y > uniforms.grid_size) {
         return;
     }
 
@@ -32,12 +35,12 @@ struct Uniforms {
 
     if (x > 0) { neighborhood += textureLoad(density_grid, vec2<u32>(glob.x-1, glob.y), 0).r; }
     if (y > 0) { neighborhood += textureLoad(density_grid, vec2<u32>(glob.x, glob.y-1), 0).r; }
-    if (x < uniforms.grid_size - 1) { neighborhood += textureLoad(density_grid, vec2<u32>(glob.x+1, glob.y), 0).r; } 
-    if (y < uniforms.grid_size - 1) { neighborhood += textureLoad(density_grid, vec2<u32>(glob.x, glob.y+1), 0).r; }
-    
+    if (x <= uniforms.grid_size - 1) { neighborhood += textureLoad(density_grid, vec2<u32>(glob.x+1, glob.y), 0).r; }
+    if (y <= uniforms.grid_size - 1) { neighborhood += textureLoad(density_grid, vec2<u32>(glob.x, glob.y+1), 0).r; }
 
     value = (value + diffusion_rate * neighborhood) * inv;
     textureStore(density_grid_write, glob.xy, vec4(value));
+    setBoundary(0, density_grid_write, density_grid, glob.xy);
 }
 
 @compute @workgroup_size(8, 8) fn advect (
@@ -46,14 +49,61 @@ struct Uniforms {
     _ = prev_density_grid;
     let x = glob.x;
     let y = glob.y;
-    if (x >= uniforms.grid_size || y >= uniforms.grid_size) {
+    if (x == 0 || y == 0) {
+        return;
+    }
+    if (x > uniforms.grid_size || y > uniforms.grid_size ) {
         return;
     }
 
     let velocity = textureLoad(velocity_grid, glob.xy).rg;
     let dt = uniforms.dt;
-    var pos = vec2f(f32(glob.x), f32(glob.y)) -  velocity * dt * f32(uniforms.grid_size);
+    var pos = vec2f(f32(glob.x), f32(glob.y)) - velocity * dt * f32(uniforms.grid_size);
     pos = clamp(pos / f32(uniforms.grid_size), vec2f(0), vec2f(1));
     let sample = textureSampleLevel(density_grid, samp, pos, 0).r;
     textureStore(density_grid_write, glob.xy, vec4(sample, 0, 0, 1));
+    setBoundary(0, density_grid_write, density_grid, glob.xy);
+}
+
+fn setBoundary(boundary: u32, write_grid: texture_storage_2d<r32float, write>, read_grid: texture_2d<f32>, pos: vec2<u32>)
+{
+    let x = pos.x;
+    let y = pos.y;
+    if (x == 0) {
+      if (boundary != 1) {
+        textureStore(write_grid, pos, textureLoad(read_grid, vec2<u32>(1, y), 0));
+      } else {
+        textureStore(write_grid, pos, vec4(-textureLoad(read_grid, vec2<u32>(1, y), 0).r, 0, 0, 1));
+      }
+    }
+
+    if (x == uniforms.grid_size+1) {
+      if (boundary != 1) {
+        textureStore(write_grid, pos, textureLoad(read_grid, vec2<u32>(uniforms.grid_size, y), 0));
+      } else {
+        textureStore(write_grid, pos, vec4(-textureLoad(read_grid, vec2<u32>(uniforms.grid_size, y), 0).r, 0, 0, 1));
+      }
+    }
+
+    if (y == 0) {
+      if (boundary != 2) {
+        textureStore(write_grid, pos, textureLoad(read_grid, vec2<u32>(x, 1), 0));
+      } else {
+        textureStore(write_grid, pos, vec4(0, -textureLoad(read_grid, vec2<u32>(x, 1), 0).r, 0, 1));
+      }
+    }
+
+    if (y == uniforms.grid_size+1) {
+      if (boundary != 2) {
+        textureStore(write_grid, pos, textureLoad(read_grid, vec2<u32>(x, uniforms.grid_size), 0));
+      } else {
+        textureStore(write_grid, pos, vec4(0, -textureLoad(read_grid, vec2<u32>(x, uniforms.grid_size), 0).r, 0, 1));
+      }
+    }
+
+    textureStore(write_grid, vec2u(0,0), 0.5 * (textureLoad(read_grid, vec2u(1,0), 0) + textureLoad(read_grid, vec2u(0,1), 0)));
+    textureStore(write_grid, vec2u(0,uniforms.grid_size + 1), 0.5 * (textureLoad(read_grid, vec2u(1, uniforms.grid_size + 1), 0) + textureLoad(read_grid, vec2u(0, uniforms.grid_size), 0)));
+    textureStore(write_grid, vec2u(uniforms.grid_size + 1, 0), 0.5 * (textureLoad(read_grid, vec2u(uniforms.grid_size,0), 0) + textureLoad(read_grid, vec2u(uniforms.grid_size + 1,1), 0)));
+    textureStore(write_grid, vec2u(uniforms.grid_size + 1,uniforms.grid_size + 1), 0.5 * (textureLoad(read_grid, vec2u(uniforms.grid_size,uniforms.grid_size + 1), 0) + textureLoad(read_grid, vec2u(uniforms.grid_size + 1, uniforms.grid_size), 0)));
+
 }
