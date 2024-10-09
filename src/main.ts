@@ -1,6 +1,5 @@
 import { f32, struct, u32 } from "typegpu/data/index";
 import shaders from "./shaders.wgsl?raw";
-import computeShaders from "./computeShaders.wgsl?raw";
 import computeFluidMechanics from "./computeFluidMechanics.wgsl?raw";
 import './style.css'
 import tgpu from 'typegpu'
@@ -47,6 +46,25 @@ const createFluidTexture = (device: GPUDevice, textureSize: number): [GPUTexture
   return [texture, texture2, texture3];
 }
 
+const createVelocityTexture = (device: GPUDevice, textureSize: number): GPUTexture => {
+  const textureData = new Float32Array({ length: textureSize * textureSize * 2 }).map((_, index) => index % 2 == 0 ? 0.0001 : 0.0);
+  const texture = device.createTexture({
+    'label': 'velocity texture',
+    'dimension': "2d",
+    'format': 'rg32float',
+    'size': [textureSize, textureSize, 1],
+    'usage': GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
+  });
+
+  device.queue.writeTexture({ texture: texture }, textureData, {
+    'bytesPerRow': Float32Array.BYTES_PER_ELEMENT * textureSize * 2,
+    'rowsPerImage': textureSize
+  }, { width: textureSize, height: textureSize, depthOrArrayLayers: 1 });
+
+  return texture;
+
+}
+
 async function main() {
   const adapter = await navigator.gpu?.requestAdapter();
   const device = await adapter?.requestDevice({
@@ -71,10 +89,6 @@ async function main() {
     code: shaders
   });
 
-  const computeModule = device.createShaderModule({
-    label: 'Compute texture shaders',
-    code: computeShaders
-  });
 
   const computeFluidModule = device.createShaderModule({
     label: 'fluid compute module',
@@ -93,13 +107,6 @@ async function main() {
     }
   });
 
-  const computePipeline = device.createComputePipeline({
-    label: 'compute pipeline',
-    layout: 'auto',
-    compute: {
-      module: computeModule
-    }
-  });
 
   const diffusionPipeline = device.createComputePipeline({
     label: 'diffusion pipeline',
@@ -108,7 +115,16 @@ async function main() {
       module: computeFluidModule,
       entryPoint: 'diffuse'
     }
-  })
+  });
+
+  const advectPipeline = device.createComputePipeline({
+    label: 'advect pipeline',
+    layout: 'auto',
+    compute: {
+      module: computeFluidModule,
+      entryPoint: 'advect'
+    }
+  });
 
   const renderPassDescriptor = {
     label: 'render pass diescript',
@@ -122,21 +138,16 @@ async function main() {
     ]
   } satisfies GPURenderPassDescriptor;
 
-  const computePassDescriptor = {
-    'label': 'Compute Pass Descriptor'
-  } satisfies GPUComputePassDescriptor;
-
   const diffusePassDescriptor = {
     'label': 'Diffusion Pass Descriptor'
   } satisfies GPUComputePassDescriptor;
 
+  const advectPassDescriptor = {
+    'label': 'advect Pass Descriptor'
+  } satisfies GPUComputePassDescriptor;
+
 
   // TGPU Types
-  const Uniforms = struct({
-    fun: f32,
-    time: f32
-  });
-
   const DiffusionUniforms = struct({
     diffusion_constant: f32,
     dt: f32,
@@ -145,57 +156,21 @@ async function main() {
 
   // Texture creation
 
-  const textureSize = 128;
+  const textureSize = 256;
   let [texture, texture_write, prev_texture] = createFluidTexture(device, textureSize);
+  let velocity_texture = createVelocityTexture(device, textureSize);
 
   const sampler = device.createSampler({
     'magFilter': 'linear',
     'minFilter': 'linear'
   });
 
-  const uniforms = tgpu.createBuffer(Uniforms, {
-    fun: Math.random(),
-    time: performance.now()
-  }).$device(device)
-    .$usage(tgpu.Uniform);
-
-  const computeUniforms = tgpu.createBuffer(Uniforms, {
-    fun: Math.PI,
-    time: performance.now()
-  }).$device(device).$usage(tgpu.Uniform);
 
   const diffusionUniforms = tgpu.createBuffer(DiffusionUniforms, {
-    'diffusion_constant': 0.001,
-    'dt': 0.03,
+    'diffusion_constant': 0.0001,
+    'dt': 0.0003,
     'grid_size': textureSize
   }).$device(device).$usage(tgpu.Uniform);
-
-
-  const computeBindGroup = device.createBindGroup({
-    layout: computePipeline.getBindGroupLayout(0),
-    entries: [
-      {
-        binding: 2,
-        resource: computeUniforms
-      },
-      {
-        binding: 0,
-        resource: texture.createView()
-      },
-      {
-        binding: 1,
-        resource: sampler
-      },
-    ]
-  });
-
-
-  /*
-  @group(0) @binding(0) var density_grid: texture_storage_2d<r32float, write>;
-  @group(0) @binding(1) var prev_density_grid: texture_storage_2d<r32float, read>;
-  @group(0) @binding(2) var<uniform>uniforms : Uniforms;
-*/
-
 
 
   const canvasToSizeMap = new WeakMap();
@@ -215,7 +190,7 @@ async function main() {
   }
 
   function performDiffusion(encoder: GPUCommandEncoder) {
-    for (var i = 0; i < 10; i++) {
+    for (var i = 0; i < 1; i++) {
       const diffusionPass = encoder.beginComputePass(diffusePassDescriptor);
 
       const diffusionBindGroup = device!.createBindGroup({
@@ -250,22 +225,57 @@ async function main() {
     [prev_texture, texture] = [texture, prev_texture]
   }
 
+  function performAdvection(encoder: GPUCommandEncoder) {
+    for (var i = 0; i < 10; i++) {
+      const advectPass = encoder.beginComputePass(advectPassDescriptor);
+
+      const advectBindGroup = device!.createBindGroup({
+        layout: advectPipeline.getBindGroupLayout(0),
+        entries: [
+          {
+            binding: 0,
+            resource: texture.createView()
+          },
+          {
+            binding: 1,
+            resource: texture_write.createView()
+          },
+          {
+            binding: 2,
+            resource: prev_texture.createView()
+          },
+          {
+            binding: 3,
+            resource: diffusionUniforms
+          },
+          {
+            binding: 4,
+            resource: velocity_texture.createView()
+          },
+          {
+            binding: 5,
+            resource: sampler
+          },
+        ]
+      });
+
+      advectPass.setPipeline(advectPipeline);
+      advectPass.setBindGroup(0, advectBindGroup);
+      advectPass.dispatchWorkgroups(textureSize / 8, textureSize / 8);
+      advectPass.end();
+      [texture, texture_write] = [texture_write, texture]
+    }
+
+    [prev_texture, texture] = [texture, prev_texture]
+  }
+
   function render() {
     resizeCanvasToDisplaySize(canvas);
     renderPassDescriptor.colorAttachments[0].view = context.getCurrentTexture().createView();
     const encoder = device?.createCommandEncoder({ label: 'commandendocoer' });
 
-    // const computePass = encoder?.beginComputePass(computePassDescriptor);
-    // computePass?.setPipeline(computePipeline);
-    // computePass?.setBindGroup(0, computeBindGroup);
-    // tgpu.write(computeUniforms, {
-    //   fun: Math.PI,
-    //   time: performance.now() / 200
-    // })
-    // computePass?.dispatchWorkgroups(textureSize / 8, textureSize / 8);
-    // computePass?.end();
-
     performDiffusion(encoder!);
+    performAdvection(encoder!);
 
     const renderBindGroup = device!.createBindGroup({
       layout: renderPipeline.getBindGroupLayout(0),
@@ -276,10 +286,6 @@ async function main() {
       {
         binding: 1,
         resource: sampler
-      },
-      {
-        binding: 2,
-        resource: uniforms
       }
       ]
     });

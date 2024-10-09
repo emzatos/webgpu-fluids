@@ -1,7 +1,4 @@
-struct Uniforms {
-    fun: f32,
-    time: f32
-}
+
 struct VertexOutput {
     @builtin(position) position: vec4f,
     @location(0) uv : vec2f
@@ -9,7 +6,6 @@ struct VertexOutput {
 
 @group(0) @binding(0) var tex: texture_2d<f32>;
 @group(0) @binding(1) var samp: sampler;
-@group(0) @binding(2) var<uniform> uniforms : Uniforms;
 
 @vertex fn vs (
     @builtin(vertex_index) vertexIndex : u32
@@ -38,7 +34,7 @@ struct VertexOutput {
 }
 
 @fragment fn fs(vin: VertexOutput) -> @location(0) vec4f { 
-    _ = uniforms;
-    return 1.1 * textureSample(tex, samp, vec2f(vin.uv));
+    let value = 1.1 * textureSample(tex, samp, vec2f(vin.uv));
+    return pow(value.xxxw, vec4(2.5, 1.7, 0.6, 1));
     
 }
