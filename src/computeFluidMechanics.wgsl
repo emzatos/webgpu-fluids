@@ -64,11 +64,17 @@ struct Uniforms {
     let velocity_x = textureLoad(velocity_grid_horizontal, glob.xy, 0).r;
     let velocity_y = textureLoad(velocity_grid_vertical, glob.xy, 0).r;
     let velocity = vec2f(velocity_x, velocity_y);
-    let dt = uniforms.dt;
-    var pos = vec2f(f32(glob.x), f32(glob.y)) - velocity * dt * f32(uniforms.grid_size);
-    pos = clamp(pos / f32(uniforms.grid_size), vec2f(0), vec2f(1));
-    let sample = textureSampleLevel(density_grid, samp, pos, 0).r;
-    textureStore(density_grid_write, glob.xy, vec4(sample, 0, 0, 1));
+
+    let dt0 = vec2f(uniforms.dt * f32(uniforms.grid_size));
+    let backPos = clamp(
+      vec2f(glob.xy) - dt0 * velocity,
+      vec2f(0.5),
+      vec2f(f32(uniforms.grid_size) + vec2f(0.5))
+    );
+    let texSize = vec2f(textureDimensions(density_grid));
+    let samplePos = (backPos + 0.5) / texSize;
+    let value = textureSampleLevel(density_grid, samp, samplePos, 0);
+    textureStore(density_grid_write, glob.xy, value);
     setBoundary(density_grid_write, density_grid, glob.xy);
 }
 
