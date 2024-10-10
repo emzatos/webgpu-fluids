@@ -10,7 +10,7 @@ const createFluidTexture = (
 ): [GPUTexture, GPUTexture, GPUTexture] => {
   const textureData = new Float32Array({
     length: textureSize * textureSize,
-  }).map((_, index) => (index % 2 == 0 ? Math.random() : 0));
+  }).map(() => (Math.random()));
   const texture = device.createTexture({
     label: "storage texture",
     format: "r32float",
@@ -74,18 +74,73 @@ const createFluidTexture = (
   return [texture, texture2, texture3];
 };
 
-const createVelocityTexture = (
+const createVelocityTextures = (
   device: GPUDevice,
   textureSize: number,
-): GPUTexture => {
-  const textureData = new Float32Array({
-    length: textureSize * textureSize * 2,
-  }).map((_, index) => (index % 2 == 0 ? 0.5 : 0));
-  const texture = device.createTexture({
+): [GPUTexture, GPUTexture, GPUTexture, GPUTexture, GPUTexture, GPUTexture] => {
+
+  const textureData_x = new Float32Array({
+    length: textureSize * textureSize,
+  }).map(() => Math.random());
+
+  const textureData_y = new Float32Array({
+    length: textureSize * textureSize,
+  }).map(() => 0);
+
+  const prev_x = device.createTexture({
     label: "velocity texture",
-    dimension: "2d",
-    format: "rg32float",
-    size: [textureSize, textureSize, 1],
+    format: "r32float",
+    size: [textureSize, textureSize],
+    usage:
+      GPUTextureUsage.STORAGE_BINDING |
+      GPUTextureUsage.TEXTURE_BINDING |
+      GPUTextureUsage.COPY_DST,
+  });
+
+  const read_x = device.createTexture({
+    label: "velocity texture",
+    format: "r32float",
+    size: [textureSize, textureSize],
+    usage:
+      GPUTextureUsage.STORAGE_BINDING |
+      GPUTextureUsage.TEXTURE_BINDING |
+      GPUTextureUsage.COPY_DST,
+  });
+
+  const write_x = device.createTexture({
+    label: "velocity texture",
+    format: "r32float",
+    size: [textureSize, textureSize],
+    usage:
+      GPUTextureUsage.STORAGE_BINDING |
+      GPUTextureUsage.TEXTURE_BINDING |
+      GPUTextureUsage.COPY_DST,
+  });
+
+  const prev_y = device.createTexture({
+    label: "velocity texture",
+    format: "r32float",
+    size: [textureSize, textureSize],
+    usage:
+      GPUTextureUsage.STORAGE_BINDING |
+      GPUTextureUsage.TEXTURE_BINDING |
+      GPUTextureUsage.COPY_DST,
+  });
+
+  const read_y = device.createTexture({
+    label: "velocity texture",
+    format: "r32float",
+    size: [textureSize, textureSize],
+    usage:
+      GPUTextureUsage.STORAGE_BINDING |
+      GPUTextureUsage.TEXTURE_BINDING |
+      GPUTextureUsage.COPY_DST,
+  });
+
+  const write_y = device.createTexture({
+    label: "velocity texture",
+    format: "r32float",
+    size: [textureSize, textureSize],
     usage:
       GPUTextureUsage.STORAGE_BINDING |
       GPUTextureUsage.TEXTURE_BINDING |
@@ -93,16 +148,66 @@ const createVelocityTexture = (
   });
 
   device.queue.writeTexture(
-    { texture: texture },
-    textureData,
+    { texture: prev_x },
+    textureData_x,
     {
-      bytesPerRow: Float32Array.BYTES_PER_ELEMENT * textureSize * 2,
+      bytesPerRow: Float32Array.BYTES_PER_ELEMENT * textureSize,
       rowsPerImage: textureSize,
     },
     { width: textureSize, height: textureSize },
   );
 
-  return texture;
+  device.queue.writeTexture(
+    { texture: read_x },
+    textureData_x,
+    {
+      bytesPerRow: Float32Array.BYTES_PER_ELEMENT * textureSize,
+      rowsPerImage: textureSize,
+    },
+    { width: textureSize, height: textureSize },
+  );
+
+  device.queue.writeTexture(
+    { texture: write_x },
+    textureData_x,
+    {
+      bytesPerRow: Float32Array.BYTES_PER_ELEMENT * textureSize,
+      rowsPerImage: textureSize,
+    },
+    { width: textureSize, height: textureSize },
+  );
+
+  device.queue.writeTexture(
+    { texture: prev_y },
+    textureData_y,
+    {
+      bytesPerRow: Float32Array.BYTES_PER_ELEMENT * textureSize,
+      rowsPerImage: textureSize,
+    },
+    { width: textureSize, height: textureSize },
+  );
+
+  device.queue.writeTexture(
+    { texture: read_y },
+    textureData_y,
+    {
+      bytesPerRow: Float32Array.BYTES_PER_ELEMENT * textureSize,
+      rowsPerImage: textureSize,
+    },
+    { width: textureSize, height: textureSize },
+  );
+
+  device.queue.writeTexture(
+    { texture: write_y },
+    textureData_y,
+    {
+      bytesPerRow: Float32Array.BYTES_PER_ELEMENT * textureSize,
+      rowsPerImage: textureSize,
+    },
+    { width: textureSize, height: textureSize },
+  );
+
+  return [prev_x, read_x, write_x, prev_y, read_y, write_y];
 };
 
 async function main() {
@@ -189,16 +294,17 @@ async function main() {
     diffusion_constant: f32,
     dt: f32,
     grid_size: u32,
+    boundaryValue: u32
   });
 
   // Texture creation
 
-  const textureSize = 256;
+  const textureSize = 128;
   let [texture, texture_write, prev_texture] = createFluidTexture(
     device,
     textureSize + 2,
   );
-  let velocity_texture = createVelocityTexture(device, textureSize + 2);
+  let [prev_vel_x, read_vel_x, write_vel_x, prev_vel_y, read_vel_y, write_vel_y] = createVelocityTextures(device, textureSize + 2);
 
   const sampler = device.createSampler({
     magFilter: "linear",
@@ -210,6 +316,7 @@ async function main() {
       diffusion_constant: 0.01,
       dt: 0.003,
       grid_size: textureSize,
+      boundaryValue: 0
     })
     .$device(device)
     .$usage(tgpu.Uniform);
@@ -233,7 +340,7 @@ async function main() {
     return needResize;
   }
 
-  function performDiffusion(encoder: GPUCommandEncoder) {
+  function performDiffusion(encoder: GPUCommandEncoder, read_texture: GPUTexture, write_texture: GPUTexture, last_texture: GPUTexture) {
     for (var i = 0; i < 10; i++) {
       const diffusionPass = encoder.beginComputePass(diffusePassDescriptor);
 
@@ -242,19 +349,19 @@ async function main() {
         entries: [
           {
             binding: 0,
-            resource: texture.createView(),
+            resource: diffusionUniforms
           },
           {
             binding: 1,
-            resource: texture_write.createView(),
+            resource: read_texture.createView()
           },
           {
             binding: 2,
-            resource: prev_texture.createView(),
+            resource: write_texture.createView()
           },
           {
             binding: 3,
-            resource: diffusionUniforms,
+            resource: last_texture.createView()
           },
         ],
       });
@@ -263,13 +370,13 @@ async function main() {
       diffusionPass.setBindGroup(0, diffusionBindGroup);
       diffusionPass.dispatchWorkgroups(textureSize / 8, textureSize / 8);
       diffusionPass.end();
-      [texture, texture_write] = [texture_write, texture];
+      [read_texture, write_texture] = [write_texture, read_texture];
     }
 
-    [prev_texture, texture] = [texture, prev_texture];
+    [last_texture, read_texture] = [read_texture, last_texture];
   }
 
-  function performAdvection(encoder: GPUCommandEncoder) {
+  function performAdvection(encoder: GPUCommandEncoder, read_texture: GPUTexture, write_texture: GPUTexture, last_texture: GPUTexture, velocity_x: GPUTexture, velocity_y: GPUTexture) {
     for (var i = 0; i < 1; i++) {
       const advectPass = encoder.beginComputePass(advectPassDescriptor);
 
@@ -278,26 +385,30 @@ async function main() {
         entries: [
           {
             binding: 0,
-            resource: texture.createView(),
-          },
-          {
-            binding: 1,
-            resource: texture_write.createView(),
-          },
-          {
-            binding: 2,
-            resource: prev_texture.createView(),
-          },
-          {
-            binding: 3,
             resource: diffusionUniforms,
           },
           {
+            binding: 1,
+            resource: read_texture.createView(),
+          },
+          {
+            binding: 2,
+            resource: write_texture.createView(),
+          },
+          {
+            binding: 3,
+            resource: last_texture.createView(),
+          },
+          {
             binding: 4,
-            resource: velocity_texture.createView(),
+            resource: velocity_x.createView(),
           },
           {
             binding: 5,
+            resource: velocity_y.createView(),
+          },
+          {
+            binding: 6,
             resource: sampler,
           },
         ],
@@ -313,6 +424,33 @@ async function main() {
     [prev_texture, texture] = [texture, prev_texture];
   }
 
+  function densityUpdate(encoder: GPUCommandEncoder) {
+    performDiffusion(encoder, texture, texture_write, prev_texture);
+    // performAdvection(encoder, texture, texture_write, prev_texture, read_vel_x, read_vel_y);
+  }
+
+  function velocityUpdate(encoder: GPUCommandEncoder) {
+    tgpu.write(diffusionUniforms, {
+      diffusion_constant: 0.01,
+      dt: 0.003,
+      grid_size: textureSize,
+      boundaryValue: 1
+    });
+
+    performDiffusion(encoder, read_vel_x, write_vel_x, prev_vel_x);
+
+    tgpu.write(diffusionUniforms, {
+      diffusion_constant: 0.01,
+      dt: 0.003,
+      grid_size: textureSize,
+      boundaryValue: 2
+    });
+
+    performDiffusion(encoder, read_vel_y, write_vel_y, prev_vel_y);
+
+
+  }
+
   function render() {
     resizeCanvasToDisplaySize(canvas);
     renderPassDescriptor.colorAttachments[0].view = context
@@ -320,8 +458,8 @@ async function main() {
       .createView();
     const encoder = device?.createCommandEncoder({ label: "commandendocoer" });
 
-    // performDiffusion(encoder!);
-    // performAdvection(encoder!);
+    densityUpdate(encoder!);
+    //  velocityUpdate(encoder!);
 
     const renderBindGroup = device!.createBindGroup({
       layout: renderPipeline.getBindGroupLayout(0),

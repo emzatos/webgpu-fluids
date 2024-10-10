@@ -3,15 +3,20 @@
 struct Uniforms {
     diffusion_constant: f32,
     dt: f32,
-    grid_size: u32
+    grid_size: u32,
+    boundaryValue: u32
 }
 
-@group(0) @binding(0) var density_grid: texture_2d<f32>;
-@group(0) @binding(1) var density_grid_write: texture_storage_2d<r32float, write>;
-@group(0) @binding(2) var prev_density_grid: texture_storage_2d<r32float, read>;
-@group(0) @binding(3) var<uniform> uniforms : Uniforms;
-@group(0) @binding(4) var velocity_grid: texture_storage_2d<rg32float, read>;
-@group(0) @binding(5) var samp: sampler;
+@group(0) @binding(0) var<uniform> uniforms : Uniforms;
+
+@group(0) @binding(1) var density_grid: texture_2d<f32>;
+@group(0) @binding(2) var density_grid_write: texture_storage_2d<r32float, write>;
+@group(0) @binding(3) var prev_density_grid: texture_storage_2d<r32float, read>;
+
+@group(0) @binding(4) var velocity_grid_horizontal: texture_2d<f32>;
+@group(0) @binding(5) var velocity_grid_vertical: texture_2d<f32>;
+
+@group(0) @binding(6) var samp: sampler;
 
 @compute @workgroup_size(8, 8) fn diffuse (
     @builtin(global_invocation_id) glob : vec3<u32>,
@@ -40,7 +45,7 @@ struct Uniforms {
 
     value = (value + diffusion_rate * neighborhood) * inv;
     textureStore(density_grid_write, glob.xy, vec4(value));
-    setBoundary(0, density_grid_write, density_grid, glob.xy);
+    setBoundary(density_grid_write, density_grid, glob.xy);
 }
 
 @compute @workgroup_size(8, 8) fn advect (
@@ -56,21 +61,23 @@ struct Uniforms {
         return;
     }
 
-    let velocity = textureLoad(velocity_grid, glob.xy).rg;
+    let velocity_x = textureLoad(velocity_grid_horizontal, glob.xy, 0).r;
+    let velocity_y = textureLoad(velocity_grid_vertical, glob.xy, 0).r;
+    let velocity = vec2f(velocity_x, velocity_y);
     let dt = uniforms.dt;
     var pos = vec2f(f32(glob.x), f32(glob.y)) - velocity * dt * f32(uniforms.grid_size);
     pos = clamp(pos / f32(uniforms.grid_size), vec2f(0), vec2f(1));
     let sample = textureSampleLevel(density_grid, samp, pos, 0).r;
     textureStore(density_grid_write, glob.xy, vec4(sample, 0, 0, 1));
-    setBoundary(0, density_grid_write, density_grid, glob.xy);
+    setBoundary(density_grid_write, density_grid, glob.xy);
 }
 
-fn setBoundary(boundary: u32, write_grid: texture_storage_2d<r32float, write>, read_grid: texture_2d<f32>, pos: vec2<u32>)
+fn setBoundary(write_grid: texture_storage_2d<r32float, write>, read_grid: texture_2d<f32>, pos: vec2<u32>)
 {
     let x = pos.x;
     let y = pos.y;
     if (x == 0) {
-      if (boundary != 1) {
+      if (uniforms.boundaryValue != 1) {
         textureStore(write_grid, pos, textureLoad(read_grid, vec2<u32>(1, y), 0));
       } else {
         textureStore(write_grid, pos, vec4(-textureLoad(read_grid, vec2<u32>(1, y), 0).r, 0, 0, 1));
@@ -78,7 +85,7 @@ fn setBoundary(boundary: u32, write_grid: texture_storage_2d<r32float, write>, r
     }
 
     if (x == uniforms.grid_size+1) {
-      if (boundary != 1) {
+      if (uniforms.boundaryValue != 1) {
         textureStore(write_grid, pos, textureLoad(read_grid, vec2<u32>(uniforms.grid_size, y), 0));
       } else {
         textureStore(write_grid, pos, vec4(-textureLoad(read_grid, vec2<u32>(uniforms.grid_size, y), 0).r, 0, 0, 1));
@@ -86,7 +93,7 @@ fn setBoundary(boundary: u32, write_grid: texture_storage_2d<r32float, write>, r
     }
 
     if (y == 0) {
-      if (boundary != 2) {
+      if (uniforms.boundaryValue != 2) {
         textureStore(write_grid, pos, textureLoad(read_grid, vec2<u32>(x, 1), 0));
       } else {
         textureStore(write_grid, pos, vec4(0, -textureLoad(read_grid, vec2<u32>(x, 1), 0).r, 0, 1));
@@ -94,7 +101,7 @@ fn setBoundary(boundary: u32, write_grid: texture_storage_2d<r32float, write>, r
     }
 
     if (y == uniforms.grid_size+1) {
-      if (boundary != 2) {
+      if (uniforms.boundaryValue != 2) {
         textureStore(write_grid, pos, textureLoad(read_grid, vec2<u32>(x, uniforms.grid_size), 0));
       } else {
         textureStore(write_grid, pos, vec4(0, -textureLoad(read_grid, vec2<u32>(x, uniforms.grid_size), 0).r, 0, 1));
