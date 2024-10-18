@@ -20,6 +20,7 @@ export class DensityTextures {
             usage:
                 GPUTextureUsage.STORAGE_BINDING |
                 GPUTextureUsage.TEXTURE_BINDING |
+                GPUTextureUsage.COPY_SRC |
                 GPUTextureUsage.COPY_DST,
         }
 

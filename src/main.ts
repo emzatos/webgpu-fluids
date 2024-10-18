@@ -1,7 +1,8 @@
-import { f32, struct, u32 } from "typegpu/data/index";
+import { f32, struct, u32, vec2f } from "typegpu/data/index";
 import shaders from "./shaders.wgsl?raw";
 import computeFluidMechanics from "./computeFluidMechanics.wgsl?raw";
 import computeProject from "./computeProject.wgsl?raw";
+import computeSplat from "./computeSplat.wgsl?raw";
 import "./style.css";
 import tgpu from "typegpu";
 import { DensityTextures } from "./DensityTextures";
@@ -25,6 +26,23 @@ async function main() {
     format: presentationFormat,
   });
 
+  let mousePosition = { x: 0, y: 0 };
+  let lastMousePosition = { x: 0, y: 0 };
+  let mouseDown = false;
+  // add mouse listener
+  canvas.addEventListener("mousemove", (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width * textureSize;
+    const y = (e.clientY - rect.top) / rect.height * textureSize;
+    mousePosition = { x, y };
+  });
+  canvas.addEventListener("mouseup", (e) => {
+    mouseDown = false;
+  });
+  canvas.addEventListener("mousedown", (e) => {
+    mouseDown = true;
+  });
+
   // shaders and pipeline
   const renderModule = device.createShaderModule({
     label: "Shaders for triablge",
@@ -39,6 +57,11 @@ async function main() {
   const computeProjectModule = device.createShaderModule({
     label: 'compute projection',
     code: computeProject
+  });
+
+  const splatModule = device.createShaderModule({
+    label: 'splat modules',
+    code: computeSplat
   });
 
   const renderPipeline = device.createRenderPipeline({
@@ -98,6 +121,15 @@ async function main() {
     },
   });
 
+  const splatPipeline = device.createComputePipeline({
+    label: "splat pipeline",
+    layout: "auto",
+    compute: {
+      module: splatModule,
+      entryPoint: "main",
+    },
+  });
+
   const renderPassDescriptor = {
     label: "render pass diescript",
     colorAttachments: [
@@ -130,6 +162,10 @@ async function main() {
     label: "project end Pass Descriptor",
   } satisfies GPUComputePassDescriptor;
 
+  const splatPassDescriptor = {
+    label: "splat Pass Descriptor",
+  } satisfies GPUComputePassDescriptor;
+
   // TGPU Types
   const DiffusionUniforms = struct({
     diffusion_constant: f32,
@@ -137,6 +173,14 @@ async function main() {
     grid_size: u32,
     boundaryValue: u32,
     h: f32
+  });
+
+  const SplatUniforms = struct({
+    pos: vec2f,
+    delta: vec2f,
+    radius: f32,
+    intensity: f32,
+    grid_size: u32
   });
 
   function initializeVelocity(textureSize: number): [Float32Array, Float32Array] {
@@ -150,7 +194,7 @@ async function main() {
         const dy = y - (N + 2) / 2;
         const dist = Math.hypot(dx, dy);
         if (dist < 20) {
-          velX[y * (N + 2) + x] = dy * 0.00;
+          velX[y * (N + 2) + x] = dy * 0.15;
           velY[y * (N + 2) + x] = -dx * 0.15;
         }
       }
@@ -179,13 +223,12 @@ async function main() {
   });
 
   const diffusionUniforms = tgpu
-    .createBuffer(DiffusionUniforms, {
-      diffusion_constant: 0.01,
-      dt: 0.016,
-      grid_size: textureSize,
-      boundaryValue: 0,
-      h: 1.0 / textureSize
-    })
+    .createBuffer(DiffusionUniforms)
+    .$device(device)
+    .$usage(tgpu.Uniform);
+
+  const splatUniforms = tgpu
+    .createBuffer(SplatUniforms)
     .$device(device)
     .$usage(tgpu.Uniform);
 
@@ -394,6 +437,86 @@ async function main() {
     performEndProjection(encoder, divergence, pressure, velx, vely);
   }
 
+  function splat(encoder: GPUCommandEncoder, x: number, y: number, dx: number, dy: number, radius: number, intensity: number) {
+    const splatPass = encoder.beginComputePass(splatPassDescriptor);
+
+    splatUniforms.write({
+      pos: vec2f(x, y),
+      delta: vec2f(dx, dy),
+      radius: radius,
+      intensity: intensity,
+      grid_size: textureSize
+    });
+
+    const splatBindGroup = device!.createBindGroup({
+      layout: splatPipeline.getBindGroupLayout(0),
+      entries: [
+        {
+          binding: 0,
+          resource: splatUniforms
+        },
+        {
+          binding: 1,
+          resource: densities.readTexture.createView()
+        },
+        {
+          binding: 2,
+          resource: densities.writeTexture.createView()
+        },
+        {
+          binding: 3,
+          resource: velx.readTexture.createView()
+        },
+        {
+          binding: 4,
+          resource: velx.writeTexture.createView()
+        },
+        {
+          binding: 5,
+          resource: vely.readTexture.createView()
+        },
+        {
+          binding: 6,
+          resource: vely.writeTexture.createView()
+        }
+      ],
+    });
+
+    splatPass.setPipeline(splatPipeline);
+    splatPass.setBindGroup(0, splatBindGroup);
+    splatPass.dispatchWorkgroups(textureSize / 8, textureSize / 8);
+    splatPass.end();
+
+    encoder.copyTextureToTexture({
+      texture: densities.writeTexture,
+    }, {
+      texture: densities.prevTexture,
+    }, {
+      width: textureSize,
+      height: textureSize,
+    });
+    encoder.copyTextureToTexture({
+      texture: velx.writeTexture,
+    }, {
+      texture: velx.prevTexture,
+    }, {
+      width: textureSize,
+      height: textureSize,
+    });
+    encoder.copyTextureToTexture({
+      texture: vely.writeTexture,
+    }, {
+      texture: vely.prevTexture,
+    }, {
+      width: textureSize,
+      height: textureSize,
+    });
+
+    densities.flip();
+    velx.flip();
+    vely.flip();
+  }
+
   function densityUpdate(encoder: GPUCommandEncoder) {
     densities.swap();
     performDiffusion(encoder, densities);
@@ -440,6 +563,14 @@ async function main() {
       .createView();
     const encoder = device?.createCommandEncoder({ label: "commandendocoer" });
 
+    // call splat with mouse position
+    if (mouseDown) {
+      splat(encoder!, mousePosition.x, mousePosition.y, (mousePosition.x - lastMousePosition.x) * 0.1, (mousePosition.y - lastMousePosition.y) * 0.1, textureSize / 50, 1);
+      densities.swap();
+      velx.swap();
+      vely.swap();
+    }
+
     velocityUpdate(encoder!);
     densityUpdate(encoder!);
 
@@ -465,6 +596,7 @@ async function main() {
 
     const commandBuffer = encoder?.finish()!;
     device?.queue.submit([commandBuffer]);
+    lastMousePosition = { x: mousePosition.x, y: mousePosition.y };
     requestAnimationFrame(render);
   }
 
