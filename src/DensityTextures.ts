@@ -71,4 +71,8 @@ export class DensityTextures {
     swap() {
         [this.prevTexture, this.writeTexture] = [this.writeTexture, this.prevTexture];
     }
+
+    setAll() {
+        [this.readTexture, this.prevTexture] = [this.writeTexture, this.writeTexture]
+    }
 }

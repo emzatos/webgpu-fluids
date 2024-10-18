@@ -6,6 +6,7 @@ import computeSplat from "./computeSplat.wgsl?raw";
 import "./style.css";
 import tgpu from "typegpu";
 import { DensityTextures } from "./DensityTextures";
+import { div } from "webgpu-matrix/dist/1.x/vec2-impl";
 
 
 async function main() {
@@ -31,10 +32,9 @@ async function main() {
   let mouseDown = false;
   // add mouse listener
   canvas.addEventListener("mousemove", (e) => {
-    const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width * textureSize;
-    const y = (e.clientY - rect.top) / rect.height * textureSize;
-    mousePosition = { x, y };
+    const rect = document.body.getBoundingClientRect();
+    mousePosition.x = (e.clientX / rect.width) * textureSize;
+    mousePosition.y = textureSize - ((e.clientY / rect.height) * textureSize);
   });
   canvas.addEventListener("mouseup", (e) => {
     mouseDown = false;
@@ -183,6 +183,10 @@ async function main() {
     grid_size: u32
   });
 
+  const FragmentUniforms = struct({
+    time: f32
+  });
+
   function initializeVelocity(textureSize: number): [Float32Array, Float32Array] {
     const N = textureSize;
     const velX = new Float32Array((N + 2) * (N + 2));
@@ -205,7 +209,7 @@ async function main() {
 
   // Texture creation
 
-  const textureSize = 256;
+  const textureSize = 1024;
   const velocityValues = initializeVelocity(textureSize);
   var densities = new DensityTextures({ device: device, textureSize: textureSize + 2 });
   var velx = new DensityTextures({ device: device, textureSize: textureSize + 2, data: velocityValues[0] });
@@ -232,6 +236,11 @@ async function main() {
     .$device(device)
     .$usage(tgpu.Uniform);
 
+  const fragmentUniforms = tgpu
+    .createBuffer(FragmentUniforms)
+    .$device(device)
+    .$usage(tgpu.Uniform);
+
   const canvasToSizeMap = new WeakMap();
 
   function resizeCanvasToDisplaySize(canvas: HTMLCanvasElement) {
@@ -251,11 +260,11 @@ async function main() {
     return needResize;
   }
 
-  function performDiffusion(encoder: GPUCommandEncoder, dens: DensityTextures) {
+  function performDiffusion(encoder: GPUCommandEncoder, dens: DensityTextures, diffusion: number, dt: number) {
 
     diffusionUniforms.write({
-      diffusion_constant: 0.01,
-      dt: 0.002,
+      diffusion_constant: diffusion,
+      dt: dt,
       grid_size: textureSize,
       boundaryValue: 2,
       h: 1.0 / textureSize
@@ -405,7 +414,7 @@ async function main() {
 
   function performMiddleProjection(encoder: GPUCommandEncoder, div: DensityTextures, pres: DensityTextures, horiz: DensityTextures, vert: DensityTextures) {
 
-    for (var i = 0; i < 10; i++) {
+    for (var i = 0; i < 100; i++) {
       const projectionPass = encoder.beginComputePass(projectMiddlePassDescriptor);
 
       const projectionBindGroup = createProjectionBindGroup(projectPipelineMiddle, div, pres, horiz, vert);
@@ -519,7 +528,7 @@ async function main() {
 
   function densityUpdate(encoder: GPUCommandEncoder) {
     densities.swap();
-    performDiffusion(encoder, densities);
+    performDiffusion(encoder, densities, 0.0001, 0.02);
     densities.swap();
     performAdvection(encoder, densities, velx.readTexture, vely.readTexture);
     densities.flip();
@@ -536,7 +545,7 @@ async function main() {
       h: 1.0 / textureSize
     });
 
-    performDiffusion(encoder, velx);
+    performDiffusion(encoder, velx, 0.0001, 0.02);
     tgpu.write(diffusionUniforms, {
       diffusion_constant: 0.0001,
       dt: 0.002,
@@ -545,7 +554,7 @@ async function main() {
       h: 1.0 / textureSize
     });
 
-    performDiffusion(encoder, vely);
+    performDiffusion(encoder, vely, 0.0001, 0.02);
     performProjection(encoder);
 
     velx.swap()
@@ -573,6 +582,8 @@ async function main() {
 
     velocityUpdate(encoder!);
     densityUpdate(encoder!);
+    fragmentUniforms.write({ time: performance.now() / 2000 });
+
 
     const renderBindGroup = device!.createBindGroup({
       layout: renderPipeline.getBindGroupLayout(0),
@@ -584,6 +595,10 @@ async function main() {
         {
           binding: 1,
           resource: sampler,
+        },
+        {
+          binding: 2,
+          resource: fragmentUniforms,
         },
       ],
     });
