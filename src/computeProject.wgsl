@@ -13,14 +13,15 @@ struct Uniforms {
 @group(0) @binding(1) var divergence_grid: texture_2d<f32>;
 @group(0) @binding(2) var divergence_grid_write: texture_storage_2d<r32float, write>;
 
-@group(0) @binding(3) var pressure_grid: texture_2d<f32>;
-@group(0) @binding(4) var pressure_grid_write: texture_storage_2d<r32float, write>;
+@group(0) @binding(3) var prev_pressure_grid: texture_2d<f32>;
+@group(0) @binding(4) var pressure_grid: texture_2d<f32>;
+@group(0) @binding(5) var pressure_grid_write: texture_storage_2d<r32float, write>;
 
-@group(0) @binding(5) var horizontal_velocity_grid: texture_2d<f32>;
-@group(0) @binding(6) var horizontal_velocity_grid_write: texture_storage_2d<r32float, write>;
+@group(0) @binding(6) var horizontal_velocity_grid: texture_2d<f32>;
+@group(0) @binding(7) var horizontal_velocity_grid_write: texture_storage_2d<r32float, write>;
 
-@group(0) @binding(7) var vertical_velocity_grid: texture_2d<f32>;
-@group(0) @binding(8) var vertical_velocity_grid_write: texture_storage_2d<r32float, write>;
+@group(0) @binding(8) var vertical_velocity_grid: texture_2d<f32>;
+@group(0) @binding(9) var vertical_velocity_grid_write: texture_storage_2d<r32float, write>;
 
 
 @compute @workgroup_size(8, 8) fn project_begin (
@@ -46,7 +47,7 @@ struct Uniforms {
 
   let value = -0.5 * uniforms.h * (horizontal_diff + vertical_diff);
   textureStore(divergence_grid_write, glob.xy, value);
-  textureStore(pressure_grid_write, glob.xy, vec4f(0.0));
+  textureStore(pressure_grid_write, glob.xy, textureLoad(prev_pressure_grid, glob.xy, 0) * 0.99);
 
   //set bnd
 }
@@ -59,7 +60,7 @@ struct Uniforms {
   _ = vertical_velocity_grid_write;
   _ = horizontal_velocity_grid;
   _ = horizontal_velocity_grid_write;
-
+  _ = prev_pressure_grid;
   // update pressure from divergence
   let x = glob.x;
   let y = glob.y;
@@ -86,7 +87,7 @@ struct Uniforms {
   _ = divergence_grid_write;
   _ = divergence_grid;
   _ = pressure_grid_write;
-
+  _ = prev_pressure_grid;
   let x = glob.x;
   let y = glob.y;
   if (x == 0 || y == 0) {

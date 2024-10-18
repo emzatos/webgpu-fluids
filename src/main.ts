@@ -139,16 +139,36 @@ async function main() {
     h: f32
   });
 
+  function initializeVelocity(textureSize: number): [Float32Array, Float32Array] {
+    const N = textureSize;
+    const velX = new Float32Array((N + 2) * (N + 2));
+    const velY = new Float32Array((N + 2) * (N + 2));
+
+    for (let x = 1; x <= N; ++x) {
+      for (let y = 1; y <= N; ++y) {
+        const dx = x - (N + 2) / 2;
+        const dy = y - (N + 2) / 2;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 20) {
+          velX[y * (N + 2) + x] = dy * 0.00;
+          velY[y * (N + 2) + x] = -dx * 0.15;
+        }
+      }
+    }
+
+    return [velX, velY];
+  }
+
   // Texture creation
 
   const textureSize = 256;
+  const velocityValues = initializeVelocity(textureSize);
   var densities = new DensityTextures({ device: device, textureSize: textureSize + 2 });
-  var velx = new DensityTextures({ device: device, textureSize: textureSize + 2 });
+  var velx = new DensityTextures({ device: device, textureSize: textureSize + 2, data: velocityValues[0] });
 
-  var temp = new Float32Array({ length: (textureSize + 2) * (textureSize + 2) }).fill(1.0);
-  var vely = new DensityTextures({ device: device, textureSize: textureSize + 2 });
+  var vely = new DensityTextures({ device: device, textureSize: textureSize + 2, data: velocityValues[1] });
 
-  temp = new Float32Array({ length: (textureSize + 2) * (textureSize + 2) }).fill(0.0);
+  var temp = new Float32Array({ length: (textureSize + 2) * (textureSize + 2) }).fill(0.0);
 
   var divergence = new DensityTextures({ device: device, textureSize: textureSize + 2, data: temp });
   var pressure = new DensityTextures({ device: device, textureSize: textureSize + 2, data: temp });
@@ -161,7 +181,7 @@ async function main() {
   const diffusionUniforms = tgpu
     .createBuffer(DiffusionUniforms, {
       diffusion_constant: 0.01,
-      dt: 0.003,
+      dt: 0.016,
       grid_size: textureSize,
       boundaryValue: 0,
       h: 1.0 / textureSize
@@ -189,7 +209,16 @@ async function main() {
   }
 
   function performDiffusion(encoder: GPUCommandEncoder, dens: DensityTextures) {
-    for (var i = 0; i < 10; i++) {
+
+    diffusionUniforms.write({
+      diffusion_constant: 0.01,
+      dt: 0.002,
+      grid_size: textureSize,
+      boundaryValue: 2,
+      h: 1.0 / textureSize
+    });
+
+    for (var i = 0; i < 20; i++) {
       const diffusionPass = encoder.beginComputePass(diffusePassDescriptor);
 
       const diffusionBindGroup = device!.createBindGroup({
@@ -218,13 +247,11 @@ async function main() {
       diffusionPass.setBindGroup(0, diffusionBindGroup);
       diffusionPass.dispatchWorkgroups(textureSize / 8, textureSize / 8);
       diffusionPass.end();
-      dens.swap();
+      dens.flip();
     }
-
-    dens.commit();
   }
 
-  function performAdvection(encoder: GPUCommandEncoder, prev_grid: GPUTexture, new_grid: GPUTexture, horizontal: GPUTexture, vertical: GPUTexture) {
+  function performAdvection(encoder: GPUCommandEncoder, grid: DensityTextures, horizontal: GPUTexture, vertical: GPUTexture) {
     const advectPass = encoder.beginComputePass(advectPassDescriptor);
 
     const advectBindGroup = device!.createBindGroup({
@@ -236,15 +263,15 @@ async function main() {
         },
         {
           binding: 1,
-          resource: prev_grid.createView(),
+          resource: grid.readTexture.createView(),
         },
         {
           binding: 2,
-          resource: new_grid.createView(),
+          resource: grid.writeTexture.createView(),
         },
         {
           binding: 3,
-          resource: prev_grid.createView(),
+          resource: grid.prevTexture.createView(), //unused
         },
         {
           binding: 4,
@@ -256,7 +283,7 @@ async function main() {
         },
         {
           binding: 6,
-          resource: sampler,
+          resource: sampler, //unused
         },
       ],
     });
@@ -265,6 +292,7 @@ async function main() {
     advectPass.setBindGroup(0, advectBindGroup);
     advectPass.dispatchWorkgroups(textureSize / 8, textureSize / 8);
     advectPass.end();
+    grid.flip();
   }
 
   function createProjectionBindGroup(pipeline: GPUComputePipeline, div: DensityTextures, pres: DensityTextures, horiz: DensityTextures, vert: DensityTextures): GPUBindGroup {
@@ -285,26 +313,30 @@ async function main() {
         },
         {
           binding: 3,
-          resource: pres.readTexture.createView(),
+          resource: pres.prevTexture.createView(),
         },
         {
           binding: 4,
-          resource: pres.writeTexture.createView(),
+          resource: pres.readTexture.createView(),
         },
         {
           binding: 5,
-          resource: horiz.readTexture.createView(),
+          resource: pres.writeTexture.createView(),
         },
         {
           binding: 6,
-          resource: horiz.writeTexture.createView(),
+          resource: horiz.readTexture.createView(),
         },
         {
           binding: 7,
-          resource: vert.readTexture.createView(),
+          resource: horiz.writeTexture.createView(),
         },
         {
           binding: 8,
+          resource: vert.readTexture.createView(),
+        },
+        {
+          binding: 9,
           resource: vert.writeTexture.createView(),
         },
       ],
@@ -323,13 +355,14 @@ async function main() {
     projectionPass.setBindGroup(0, projectionBindGroup);
     projectionPass.dispatchWorkgroups(textureSize / 8, textureSize / 8);
     projectionPass.end();
+    pres.flip();
     pres.swap();
-    div.swap();
+    div.flip();
   }
 
   function performMiddleProjection(encoder: GPUCommandEncoder, div: DensityTextures, pres: DensityTextures, horiz: DensityTextures, vert: DensityTextures) {
 
-    for (var i = 0; i < 20; i++) {
+    for (var i = 0; i < 10; i++) {
       const projectionPass = encoder.beginComputePass(projectMiddlePassDescriptor);
 
       const projectionBindGroup = createProjectionBindGroup(projectPipelineMiddle, div, pres, horiz, vert);
@@ -338,7 +371,7 @@ async function main() {
       projectionPass.setBindGroup(0, projectionBindGroup);
       projectionPass.dispatchWorkgroups(textureSize / 8, textureSize / 8);
       projectionPass.end();
-      pres.swap();
+      pres.flip();
     }
   }
 
@@ -351,8 +384,8 @@ async function main() {
     projectionPass.setBindGroup(0, projectionBindGroup);
     projectionPass.dispatchWorkgroups(textureSize / 8, textureSize / 8);
     projectionPass.end();
-    horiz.swap();
-    vert.swap();
+    horiz.flip();
+    vert.flip();
   }
 
   function performProjection(encoder: GPUCommandEncoder) {
@@ -362,45 +395,42 @@ async function main() {
   }
 
   function densityUpdate(encoder: GPUCommandEncoder) {
-    //   performDiffusion(encoder, densities);
-    densities.commit();
-    performAdvection(encoder, densities.readTexture, densities.writeTexture, velx.readTexture, vely.readTexture);
     densities.swap();
-    // densities.swap();
-    // densities.commit();
+    performDiffusion(encoder, densities);
+    densities.swap();
+    performAdvection(encoder, densities, velx.readTexture, vely.readTexture);
+    densities.flip();
   }
 
   function velocityUpdate(encoder: GPUCommandEncoder) {
-    // tgpu.write(diffusionUniforms, {
-    //   diffusion_constant: 0.01,
-    //   dt: 0.003,
-    //   grid_size: textureSize,
-    //   boundaryValue: 1,
-    //   h: 1.0 / textureSize
-    // });
+    velx.swap();
+    vely.swap();
+    tgpu.write(diffusionUniforms, {
+      diffusion_constant: 0.0001,
+      dt: 0.002,
+      grid_size: textureSize,
+      boundaryValue: 1,
+      h: 1.0 / textureSize
+    });
 
-    // performDiffusion(encoder, velx);
+    performDiffusion(encoder, velx);
+    tgpu.write(diffusionUniforms, {
+      diffusion_constant: 0.0001,
+      dt: 0.002,
+      grid_size: textureSize,
+      boundaryValue: 2,
+      h: 1.0 / textureSize
+    });
 
-    // tgpu.write(diffusionUniforms, {
-    //   diffusion_constant: 0.01,
-    //   dt: 0.003,
-    //   grid_size: textureSize,
-    //   boundaryValue: 2,
-    //   h: 1.0 / textureSize
-    // });
-
-    // performDiffusion(encoder, vely);
-
+    performDiffusion(encoder, vely);
     performProjection(encoder);
 
-    velx.commit()
-    performAdvection(encoder, velx.readTexture, velx.writeTexture, velx.prevTexture, vely.prevTexture);
-    velx.swap();
-    vely.commit();
-    performAdvection(encoder, vely.readTexture, vely.writeTexture, velx.prevTexture, vely.prevTexture);
+    velx.swap()
     vely.swap();
-    //   performProjection(encoder)
 
+    performAdvection(encoder, velx, velx.prevTexture, vely.prevTexture);
+    performAdvection(encoder, vely, velx.prevTexture, vely.prevTexture);
+    performProjection(encoder)
   }
 
   function render() {

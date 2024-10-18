@@ -63,11 +63,11 @@ export class DensityTextures {
         return textureData;
     }
 
-    swap() {
+    flip() {
         [this.readTexture, this.writeTexture] = [this.writeTexture, this.readTexture];
     }
 
-    commit() {
+    swap() {
         [this.prevTexture, this.writeTexture] = [this.writeTexture, this.prevTexture];
     }
 }
