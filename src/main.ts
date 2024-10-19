@@ -6,8 +6,7 @@ import computeSplat from "./computeSplat.wgsl?raw";
 import "./style.css";
 import tgpu from "typegpu";
 import { DensityTextures } from "./DensityTextures";
-import { div } from "webgpu-matrix/dist/1.x/vec2-impl";
-
+import { MouseHandler } from "./MouseHandler";
 
 async function main() {
   const adapter = await navigator.gpu?.requestAdapter();
@@ -26,23 +25,9 @@ async function main() {
     device,
     format: presentationFormat,
   });
+  const textureSize = 1024;
 
-  let mousePosition = { x: 0, y: 0 };
-  let lastMousePosition = { x: 0, y: 0 };
-  let mouseDown = false;
-  // add mouse listener
-  canvas.addEventListener("mousemove", (e) => {
-    const rect = document.body.getBoundingClientRect();
-    mousePosition.x = (e.clientX / rect.width) * textureSize;
-    mousePosition.y = textureSize - ((e.clientY / rect.height) * textureSize);
-  });
-  canvas.addEventListener("mouseup", (e) => {
-    mouseDown = false;
-  });
-  canvas.addEventListener("mousedown", (e) => {
-    mouseDown = true;
-  });
-
+  const mouseHandler = new MouseHandler(canvas, textureSize);
   // shaders and pipeline
   const renderModule = device.createShaderModule({
     label: "Shaders for triablge",
@@ -55,13 +40,13 @@ async function main() {
   });
 
   const computeProjectModule = device.createShaderModule({
-    label: 'compute projection',
-    code: computeProject
+    label: "compute projection",
+    code: computeProject,
   });
 
   const splatModule = device.createShaderModule({
-    label: 'splat modules',
-    code: computeSplat
+    label: "splat modules",
+    code: computeSplat,
   });
 
   const renderPipeline = device.createRenderPipeline({
@@ -172,7 +157,7 @@ async function main() {
     dt: f32,
     grid_size: u32,
     boundaryValue: u32,
-    h: f32
+    h: f32,
   });
 
   const SplatUniforms = struct({
@@ -180,14 +165,16 @@ async function main() {
     delta: vec2f,
     radius: f32,
     intensity: f32,
-    grid_size: u32
+    grid_size: u32,
   });
 
   const FragmentUniforms = struct({
-    time: f32
+    time: f32,
   });
 
-  function initializeVelocity(textureSize: number): [Float32Array, Float32Array] {
+  function initializeVelocity(
+    textureSize: number
+  ): [Float32Array, Float32Array] {
     const N = textureSize;
     const velX = new Float32Array((N + 2) * (N + 2));
     const velY = new Float32Array((N + 2) * (N + 2));
@@ -209,17 +196,37 @@ async function main() {
 
   // Texture creation
 
-  const textureSize = 1024;
   const velocityValues = initializeVelocity(textureSize);
-  var densities = new DensityTextures({ device: device, textureSize: textureSize + 2 });
-  var velx = new DensityTextures({ device: device, textureSize: textureSize + 2, data: velocityValues[0] });
+  var densities = new DensityTextures({
+    device: device,
+    textureSize: textureSize + 2,
+  });
+  var velx = new DensityTextures({
+    device: device,
+    textureSize: textureSize + 2,
+    data: velocityValues[0],
+  });
 
-  var vely = new DensityTextures({ device: device, textureSize: textureSize + 2, data: velocityValues[1] });
+  var vely = new DensityTextures({
+    device: device,
+    textureSize: textureSize + 2,
+    data: velocityValues[1],
+  });
 
-  var temp = new Float32Array({ length: (textureSize + 2) * (textureSize + 2) }).fill(0.0);
+  var temp = new Float32Array({
+    length: (textureSize + 2) * (textureSize + 2),
+  }).fill(0.0);
 
-  var divergence = new DensityTextures({ device: device, textureSize: textureSize + 2, data: temp });
-  var pressure = new DensityTextures({ device: device, textureSize: textureSize + 2, data: temp });
+  var divergence = new DensityTextures({
+    device: device,
+    textureSize: textureSize + 2,
+    data: temp,
+  });
+  var pressure = new DensityTextures({
+    device: device,
+    textureSize: textureSize + 2,
+    data: temp,
+  });
 
   const sampler = device.createSampler({
     magFilter: "linear",
@@ -248,7 +255,7 @@ async function main() {
     width = Math.max(1, Math.min(width, device?.limits.maxTextureDimension2D!));
     height = Math.max(
       1,
-      Math.min(height, device?.limits.maxTextureDimension2D!),
+      Math.min(height, device?.limits.maxTextureDimension2D!)
     );
 
     const needResize = canvas.width !== width || canvas.height !== height;
@@ -260,14 +267,18 @@ async function main() {
     return needResize;
   }
 
-  function performDiffusion(encoder: GPUCommandEncoder, dens: DensityTextures, diffusion: number, dt: number) {
-
+  function performDiffusion(
+    encoder: GPUCommandEncoder,
+    dens: DensityTextures,
+    diffusion: number,
+    dt: number
+  ) {
     diffusionUniforms.write({
       diffusion_constant: diffusion,
       dt: dt,
       grid_size: textureSize,
       boundaryValue: 2,
-      h: 1.0 / textureSize
+      h: 1.0 / textureSize,
     });
 
     for (var i = 0; i < 20; i++) {
@@ -278,19 +289,19 @@ async function main() {
         entries: [
           {
             binding: 0,
-            resource: diffusionUniforms
+            resource: diffusionUniforms,
           },
           {
             binding: 1,
-            resource: dens.readTexture.createView()
+            resource: dens.readTexture.createView(),
           },
           {
             binding: 2,
-            resource: dens.writeTexture.createView()
+            resource: dens.writeTexture.createView(),
           },
           {
             binding: 3,
-            resource: dens.prevTexture.createView()
+            resource: dens.prevTexture.createView(),
           },
         ],
       });
@@ -303,7 +314,12 @@ async function main() {
     }
   }
 
-  function performAdvection(encoder: GPUCommandEncoder, grid: DensityTextures, horizontal: GPUTexture, vertical: GPUTexture) {
+  function performAdvection(
+    encoder: GPUCommandEncoder,
+    grid: DensityTextures,
+    horizontal: GPUTexture,
+    vertical: GPUTexture
+  ) {
     const advectPass = encoder.beginComputePass(advectPassDescriptor);
 
     const advectBindGroup = device!.createBindGroup({
@@ -347,7 +363,13 @@ async function main() {
     grid.flip();
   }
 
-  function createProjectionBindGroup(pipeline: GPUComputePipeline, div: DensityTextures, pres: DensityTextures, horiz: DensityTextures, vert: DensityTextures): GPUBindGroup {
+  function createProjectionBindGroup(
+    pipeline: GPUComputePipeline,
+    div: DensityTextures,
+    pres: DensityTextures,
+    horiz: DensityTextures,
+    vert: DensityTextures
+  ): GPUBindGroup {
     const projectionBindGroup = device!.createBindGroup({
       layout: pipeline.getBindGroupLayout(0),
       entries: [
@@ -397,11 +419,22 @@ async function main() {
     return projectionBindGroup;
   }
 
-
-  function performBeginProjection(encoder: GPUCommandEncoder, div: DensityTextures, pres: DensityTextures, horiz: DensityTextures, vert: DensityTextures) {
+  function performBeginProjection(
+    encoder: GPUCommandEncoder,
+    div: DensityTextures,
+    pres: DensityTextures,
+    horiz: DensityTextures,
+    vert: DensityTextures
+  ) {
     const projectionPass = encoder.beginComputePass(projectBeginPassDescriptor);
 
-    const projectionBindGroup = createProjectionBindGroup(projectPipelineBegin, div, pres, horiz, vert);
+    const projectionBindGroup = createProjectionBindGroup(
+      projectPipelineBegin,
+      div,
+      pres,
+      horiz,
+      vert
+    );
 
     projectionPass.setPipeline(projectPipelineBegin);
     projectionPass.setBindGroup(0, projectionBindGroup);
@@ -412,12 +445,25 @@ async function main() {
     div.flip();
   }
 
-  function performMiddleProjection(encoder: GPUCommandEncoder, div: DensityTextures, pres: DensityTextures, horiz: DensityTextures, vert: DensityTextures) {
+  function performMiddleProjection(
+    encoder: GPUCommandEncoder,
+    div: DensityTextures,
+    pres: DensityTextures,
+    horiz: DensityTextures,
+    vert: DensityTextures
+  ) {
+    for (var i = 0; i < 200; i++) {
+      const projectionPass = encoder.beginComputePass(
+        projectMiddlePassDescriptor
+      );
 
-    for (var i = 0; i < 100; i++) {
-      const projectionPass = encoder.beginComputePass(projectMiddlePassDescriptor);
-
-      const projectionBindGroup = createProjectionBindGroup(projectPipelineMiddle, div, pres, horiz, vert);
+      const projectionBindGroup = createProjectionBindGroup(
+        projectPipelineMiddle,
+        div,
+        pres,
+        horiz,
+        vert
+      );
 
       projectionPass.setPipeline(projectPipelineMiddle);
       projectionPass.setBindGroup(0, projectionBindGroup);
@@ -427,10 +473,22 @@ async function main() {
     }
   }
 
-  function performEndProjection(encoder: GPUCommandEncoder, div: DensityTextures, pres: DensityTextures, horiz: DensityTextures, vert: DensityTextures) {
+  function performEndProjection(
+    encoder: GPUCommandEncoder,
+    div: DensityTextures,
+    pres: DensityTextures,
+    horiz: DensityTextures,
+    vert: DensityTextures
+  ) {
     const projectionPass = encoder.beginComputePass(projectEndPassDescriptor);
 
-    const projectionBindGroup = createProjectionBindGroup(projectPipelineEnd, div, pres, horiz, vert);
+    const projectionBindGroup = createProjectionBindGroup(
+      projectPipelineEnd,
+      div,
+      pres,
+      horiz,
+      vert
+    );
 
     projectionPass.setPipeline(projectPipelineEnd);
     projectionPass.setBindGroup(0, projectionBindGroup);
@@ -446,7 +504,15 @@ async function main() {
     performEndProjection(encoder, divergence, pressure, velx, vely);
   }
 
-  function splat(encoder: GPUCommandEncoder, x: number, y: number, dx: number, dy: number, radius: number, intensity: number) {
+  function splat(
+    encoder: GPUCommandEncoder,
+    x: number,
+    y: number,
+    dx: number,
+    dy: number,
+    radius: number,
+    intensity: number
+  ) {
     const splatPass = encoder.beginComputePass(splatPassDescriptor);
 
     splatUniforms.write({
@@ -454,7 +520,7 @@ async function main() {
       delta: vec2f(dx, dy),
       radius: radius,
       intensity: intensity,
-      grid_size: textureSize
+      grid_size: textureSize,
     });
 
     const splatBindGroup = device!.createBindGroup({
@@ -462,32 +528,32 @@ async function main() {
       entries: [
         {
           binding: 0,
-          resource: splatUniforms
+          resource: splatUniforms,
         },
         {
           binding: 1,
-          resource: densities.readTexture.createView()
+          resource: densities.readTexture.createView(),
         },
         {
           binding: 2,
-          resource: densities.writeTexture.createView()
+          resource: densities.writeTexture.createView(),
         },
         {
           binding: 3,
-          resource: velx.readTexture.createView()
+          resource: velx.readTexture.createView(),
         },
         {
           binding: 4,
-          resource: velx.writeTexture.createView()
+          resource: velx.writeTexture.createView(),
         },
         {
           binding: 5,
-          resource: vely.readTexture.createView()
+          resource: vely.readTexture.createView(),
         },
         {
           binding: 6,
-          resource: vely.writeTexture.createView()
-        }
+          resource: vely.writeTexture.createView(),
+        },
       ],
     });
 
@@ -496,30 +562,42 @@ async function main() {
     splatPass.dispatchWorkgroups(textureSize / 8, textureSize / 8);
     splatPass.end();
 
-    encoder.copyTextureToTexture({
-      texture: densities.writeTexture,
-    }, {
-      texture: densities.prevTexture,
-    }, {
-      width: textureSize,
-      height: textureSize,
-    });
-    encoder.copyTextureToTexture({
-      texture: velx.writeTexture,
-    }, {
-      texture: velx.prevTexture,
-    }, {
-      width: textureSize,
-      height: textureSize,
-    });
-    encoder.copyTextureToTexture({
-      texture: vely.writeTexture,
-    }, {
-      texture: vely.prevTexture,
-    }, {
-      width: textureSize,
-      height: textureSize,
-    });
+    encoder.copyTextureToTexture(
+      {
+        texture: densities.writeTexture,
+      },
+      {
+        texture: densities.prevTexture,
+      },
+      {
+        width: textureSize,
+        height: textureSize,
+      }
+    );
+    encoder.copyTextureToTexture(
+      {
+        texture: velx.writeTexture,
+      },
+      {
+        texture: velx.prevTexture,
+      },
+      {
+        width: textureSize,
+        height: textureSize,
+      }
+    );
+    encoder.copyTextureToTexture(
+      {
+        texture: vely.writeTexture,
+      },
+      {
+        texture: vely.prevTexture,
+      },
+      {
+        width: textureSize,
+        height: textureSize,
+      }
+    );
 
     densities.flip();
     velx.flip();
@@ -542,7 +620,7 @@ async function main() {
       dt: 0.002,
       grid_size: textureSize,
       boundaryValue: 1,
-      h: 1.0 / textureSize
+      h: 1.0 / textureSize,
     });
 
     performDiffusion(encoder, velx, 0.0001, 0.02);
@@ -551,18 +629,18 @@ async function main() {
       dt: 0.002,
       grid_size: textureSize,
       boundaryValue: 2,
-      h: 1.0 / textureSize
+      h: 1.0 / textureSize,
     });
 
     performDiffusion(encoder, vely, 0.0001, 0.02);
     performProjection(encoder);
 
-    velx.swap()
+    velx.swap();
     vely.swap();
 
     performAdvection(encoder, velx, velx.prevTexture, vely.prevTexture);
     performAdvection(encoder, vely, velx.prevTexture, vely.prevTexture);
-    performProjection(encoder)
+    performProjection(encoder);
   }
 
   function render() {
@@ -573,8 +651,16 @@ async function main() {
     const encoder = device?.createCommandEncoder({ label: "commandendocoer" });
 
     // call splat with mouse position
-    if (mouseDown) {
-      splat(encoder!, mousePosition.x, mousePosition.y, (mousePosition.x - lastMousePosition.x) * 0.1, (mousePosition.y - lastMousePosition.y) * 0.1, textureSize / 50, 1);
+    if (mouseHandler.mouseDown) {
+      splat(
+        encoder!,
+        mouseHandler.mousePosition.x,
+        mouseHandler.mousePosition.y,
+        (mouseHandler.mousePosition.x - mouseHandler.lastMousePosition.x) * 0.1,
+        (mouseHandler.mousePosition.y - mouseHandler.lastMousePosition.y) * 0.1,
+        textureSize / 50,
+        1
+      );
       densities.swap();
       velx.swap();
       vely.swap();
@@ -583,7 +669,6 @@ async function main() {
     velocityUpdate(encoder!);
     densityUpdate(encoder!);
     fragmentUniforms.write({ time: performance.now() / 2000 });
-
 
     const renderBindGroup = device!.createBindGroup({
       layout: renderPipeline.getBindGroupLayout(0),
@@ -611,7 +696,10 @@ async function main() {
 
     const commandBuffer = encoder?.finish()!;
     device?.queue.submit([commandBuffer]);
-    lastMousePosition = { x: mousePosition.x, y: mousePosition.y };
+    mouseHandler.lastMousePosition = {
+      x: mouseHandler.mousePosition.x,
+      y: mouseHandler.mousePosition.y,
+    };
     requestAnimationFrame(render);
   }
 

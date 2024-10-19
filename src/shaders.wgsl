@@ -34,22 +34,22 @@ struct VertexOutput {
     return vout;
 }
 
-// @fragment fn fs(vin: VertexOutput) -> @location(0) vec4f { 
-//     _ = time;
-//     let value = textureSample(tex, samp, vec2f(vin.uv)).r;
-//     //rainbow
-//    // var color: vec3<f32> = hsl_to_rgb(value * 360.0, 1.0, 0.5);
-//    // black background with white fluid
-//    // var color: vec3<f32> = vec3<f32>(value, value, value);
-//    // white background with black fluid
-//   //  var color: vec3<f32> = vec3<f32>(1.0 - value, 1.0 - value, 1.0 - value);
-//   // very cool
-//    //var color: vec3<f32> = hsl_to_rgb((value) * 360.0, 2.0, 60);
+@fragment fn fs(vin: VertexOutput) -> @location(0) vec4f { 
+    _ = time;
+    let value = textureSample(tex, samp, vec2f(vin.uv)).r;
+    //rainbow
+   var color: vec3<f32> = hsl_to_rgb(value * 360.0, 1.0, 0.5);
+   // black background with white fluid
+ //   var color: vec3<f32> = vec3<f32>(value, value, value);
+   // white background with black fluid
+  //  var color: vec3<f32> = vec3<f32>(1.0 - value, 1.0 - value, 1.0 - value);
+  // very cool
+  // var color: vec3<f32> = hsl_to_rgb((value) * 360.0, 2.0, 60);
 //     let angle = atan2(vin.uv.y - 0.5, vin.uv.x - 0.5);
 // let sheen = 0.5 + 0.5 * sin(angle * 10.0 + time + value * 5.0);
 // var color = vec3<f32>(0.6, 0.6, 0.6) + sheen * vec3<f32>(0.2, 0.3, 0.3);
-//     return vec4<f32>(color, 1.0);    
-// }
+    return vec4<f32>(color, 1.0);    
+}
 
 fn hash(p: vec2f) -> f32 {
     let h = dot(p, vec2<f32>(127.1, 311.7));
@@ -67,19 +67,19 @@ fn noise(p: vec2f) -> f32 {
     );
 }
 
-@fragment fn fs(vin: VertexOutput) -> @location(0) vec4f {
-    _ = time;
-    let value = textureSample(tex, samp, vin.uv).r;
-    let laplacian = fwidth(value) * 0.5;
-    let reaction = sin(value * 10.0 + time) * 0.5 + 0.5;
-    let mixed = clamp(value + laplacian * 50.0 - reaction * 0.1, 0.0, 1.0);
-    var color = vec3<f32>(
-        mixed,
-        mixed * mixed,
-        1.0 - mixed * mixed
-    );
-    return vec4<f32>(color, 1.0);
-}
+// @fragment fn fs(vin: VertexOutput) -> @location(0) vec4f {
+//     _ = time;
+//     let value = textureSample(tex, samp, vin.uv).r;
+//     let laplacian = fwidth(value) * 0.5;
+//     let reaction = sin(value * 10.0 + time) * 0.5 + 0.5;
+//     let mixed = clamp(value + laplacian * 50.0 - reaction * 0.1, 0.0, 1.0);
+//     var color = vec3<f32>(
+//         mixed,
+//         mixed * mixed,
+//         1.0 - mixed * mixed
+//     );
+//     return vec4<f32>(color, 1.0);
+// }
 
 fn hsl_to_rgb(h: f32, s: f32, l: f32) -> vec3<f32> {
     if (s == 0.0) {
