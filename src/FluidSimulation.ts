@@ -21,6 +21,9 @@ export class FluidSimulation {
       minFilter: "linear",
     });
     var [velXData, velYData] = this.initializeVelocity(textureSize);
+    var zeroData = new Float32Array({
+      length: (textureSize + 2) * (textureSize + 2),
+    }).fill(0.0);
 
     this.densities = new DensityTextures({
       device,
@@ -42,14 +45,16 @@ export class FluidSimulation {
     this.divergence = new DensityTextures({
       device,
       textureSize: textureSize + 2,
+      data: zeroData,
     });
 
     this.pressure = new DensityTextures({
       device,
       textureSize: textureSize + 2,
+      data: zeroData,
     });
 
-    this.computePipelines = new ComputePipelines(device);
+    this.computePipelines = new ComputePipelines(device, textureSize);
   }
 
   private initializeVelocity = (
@@ -280,7 +285,6 @@ export class FluidSimulation {
     const advectPass = encoder.beginComputePass(
       this.computePipelines.advectData.descriptor
     );
-
     const advectBindGroup = this.device.createBindGroup({
       layout: this.computePipelines.advectData.pipeline.getBindGroupLayout(0),
       entries: [
