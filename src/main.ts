@@ -1,12 +1,10 @@
-import { f32, struct, u32, vec2f } from "typegpu/data/index";
+import { f32, struct, vec2f } from "typegpu/data/index";
 import shaders from "./shaders.wgsl?raw";
-import computeFluidMechanics from "./computeFluidMechanics.wgsl?raw";
-import computeProject from "./computeProject.wgsl?raw";
-import computeSplat from "./computeSplat.wgsl?raw";
 import "./style.css";
 import tgpu from "typegpu";
 import { DensityTextures } from "./DensityTextures";
 import { MouseHandler } from "./MouseHandler";
+import { ComputePipelines } from "./ComputePipelines";
 
 async function main() {
   const adapter = await navigator.gpu?.requestAdapter();
@@ -27,28 +25,13 @@ async function main() {
   });
   const textureSize = 1024;
 
+  const computePipelines = new ComputePipelines(device, 1024);
   const mouseHandler = new MouseHandler(canvas, textureSize);
   // shaders and pipeline
   const renderModule = device.createShaderModule({
     label: "Shaders for triablge",
     code: shaders,
   });
-
-  const computeFluidModule = device.createShaderModule({
-    label: "fluid compute module",
-    code: computeFluidMechanics,
-  });
-
-  const computeProjectModule = device.createShaderModule({
-    label: "compute projection",
-    code: computeProject,
-  });
-
-  const splatModule = device.createShaderModule({
-    label: "splat modules",
-    code: computeSplat,
-  });
-
   const renderPipeline = device.createRenderPipeline({
     label: "render pipeling",
     layout: "auto",
@@ -60,61 +43,6 @@ async function main() {
       targets: [{ format: presentationFormat }],
     },
   });
-
-  const diffusionPipeline = device.createComputePipeline({
-    label: "diffusion pipeline",
-    layout: "auto",
-    compute: {
-      module: computeFluidModule,
-      entryPoint: "diffuse",
-    },
-  });
-
-  const advectPipeline = device.createComputePipeline({
-    label: "advect pipeline",
-    layout: "auto",
-    compute: {
-      module: computeFluidModule,
-      entryPoint: "advect",
-    },
-  });
-
-  const projectPipelineBegin = device.createComputePipeline({
-    label: "project pipeline beginning",
-    layout: "auto",
-    compute: {
-      module: computeProjectModule,
-      entryPoint: "project_begin",
-    },
-  });
-
-  const projectPipelineMiddle = device.createComputePipeline({
-    label: "project pipeline middlie",
-    layout: "auto",
-    compute: {
-      module: computeProjectModule,
-      entryPoint: "project_middle",
-    },
-  });
-
-  const projectPipelineEnd = device.createComputePipeline({
-    label: "project pipeline end",
-    layout: "auto",
-    compute: {
-      module: computeProjectModule,
-      entryPoint: "project_end",
-    },
-  });
-
-  const splatPipeline = device.createComputePipeline({
-    label: "splat pipeline",
-    layout: "auto",
-    compute: {
-      module: splatModule,
-      entryPoint: "main",
-    },
-  });
-
   const renderPassDescriptor = {
     label: "render pass diescript",
     colorAttachments: [
@@ -127,46 +55,7 @@ async function main() {
     ],
   } satisfies GPURenderPassDescriptor;
 
-  const diffusePassDescriptor = {
-    label: "Diffusion Pass Descriptor",
-  } satisfies GPUComputePassDescriptor;
-
-  const advectPassDescriptor = {
-    label: "advect Pass Descriptor",
-  } satisfies GPUComputePassDescriptor;
-
-  const projectBeginPassDescriptor = {
-    label: "project begin Pass Descriptor",
-  } satisfies GPUComputePassDescriptor;
-
-  const projectMiddlePassDescriptor = {
-    label: "project middle Pass Descriptor",
-  } satisfies GPUComputePassDescriptor;
-
-  const projectEndPassDescriptor = {
-    label: "project end Pass Descriptor",
-  } satisfies GPUComputePassDescriptor;
-
-  const splatPassDescriptor = {
-    label: "splat Pass Descriptor",
-  } satisfies GPUComputePassDescriptor;
-
   // TGPU Types
-  const DiffusionUniforms = struct({
-    diffusion_constant: f32,
-    dt: f32,
-    grid_size: u32,
-    boundaryValue: u32,
-    h: f32,
-  });
-
-  const SplatUniforms = struct({
-    pos: vec2f,
-    delta: vec2f,
-    radius: f32,
-    intensity: f32,
-    grid_size: u32,
-  });
 
   const FragmentUniforms = struct({
     time: f32,
@@ -233,16 +122,6 @@ async function main() {
     minFilter: "linear",
   });
 
-  const diffusionUniforms = tgpu
-    .createBuffer(DiffusionUniforms)
-    .$device(device)
-    .$usage(tgpu.Uniform);
-
-  const splatUniforms = tgpu
-    .createBuffer(SplatUniforms)
-    .$device(device)
-    .$usage(tgpu.Uniform);
-
   const fragmentUniforms = tgpu
     .createBuffer(FragmentUniforms)
     .$device(device)
@@ -273,7 +152,7 @@ async function main() {
     diffusion: number,
     dt: number
   ) {
-    diffusionUniforms.write({
+    computePipelines.diffusionData.uniforms.write({
       diffusion_constant: diffusion,
       dt: dt,
       grid_size: textureSize,
@@ -282,14 +161,16 @@ async function main() {
     });
 
     for (var i = 0; i < 20; i++) {
-      const diffusionPass = encoder.beginComputePass(diffusePassDescriptor);
+      const diffusionPass = encoder.beginComputePass(
+        computePipelines.diffusionData.descriptor
+      );
 
       const diffusionBindGroup = device!.createBindGroup({
-        layout: diffusionPipeline.getBindGroupLayout(0),
+        layout: computePipelines.diffusionData.pipeline.getBindGroupLayout(0),
         entries: [
           {
             binding: 0,
-            resource: diffusionUniforms,
+            resource: computePipelines.diffusionData.uniforms,
           },
           {
             binding: 1,
@@ -306,7 +187,7 @@ async function main() {
         ],
       });
 
-      diffusionPass.setPipeline(diffusionPipeline);
+      diffusionPass.setPipeline(computePipelines.diffusionData.pipeline);
       diffusionPass.setBindGroup(0, diffusionBindGroup);
       diffusionPass.dispatchWorkgroups(textureSize / 8, textureSize / 8);
       diffusionPass.end();
@@ -320,14 +201,16 @@ async function main() {
     horizontal: GPUTexture,
     vertical: GPUTexture
   ) {
-    const advectPass = encoder.beginComputePass(advectPassDescriptor);
+    const advectPass = encoder.beginComputePass(
+      computePipelines.advectData.descriptor
+    );
 
     const advectBindGroup = device!.createBindGroup({
-      layout: advectPipeline.getBindGroupLayout(0),
+      layout: computePipelines.advectData.pipeline.getBindGroupLayout(0),
       entries: [
         {
           binding: 0,
-          resource: diffusionUniforms,
+          resource: computePipelines.advectData.uniforms,
         },
         {
           binding: 1,
@@ -351,12 +234,12 @@ async function main() {
         },
         {
           binding: 6,
-          resource: sampler, //unused
+          resource: sampler,
         },
       ],
     });
 
-    advectPass.setPipeline(advectPipeline);
+    advectPass.setPipeline(computePipelines.advectData.pipeline);
     advectPass.setBindGroup(0, advectBindGroup);
     advectPass.dispatchWorkgroups(textureSize / 8, textureSize / 8);
     advectPass.end();
@@ -375,7 +258,7 @@ async function main() {
       entries: [
         {
           binding: 0,
-          resource: diffusionUniforms,
+          resource: computePipelines.projectStageOneData.uniforms,
         },
         {
           binding: 1,
@@ -426,17 +309,19 @@ async function main() {
     horiz: DensityTextures,
     vert: DensityTextures
   ) {
-    const projectionPass = encoder.beginComputePass(projectBeginPassDescriptor);
+    const projectionPass = encoder.beginComputePass(
+      computePipelines.projectStageOneData.descriptor
+    );
 
     const projectionBindGroup = createProjectionBindGroup(
-      projectPipelineBegin,
+      computePipelines.projectStageOneData.pipeline,
       div,
       pres,
       horiz,
       vert
     );
 
-    projectionPass.setPipeline(projectPipelineBegin);
+    projectionPass.setPipeline(computePipelines.projectStageOneData.pipeline);
     projectionPass.setBindGroup(0, projectionBindGroup);
     projectionPass.dispatchWorkgroups(textureSize / 8, textureSize / 8);
     projectionPass.end();
@@ -454,18 +339,18 @@ async function main() {
   ) {
     for (var i = 0; i < 200; i++) {
       const projectionPass = encoder.beginComputePass(
-        projectMiddlePassDescriptor
+        computePipelines.projectStageTwoData.descriptor
       );
 
       const projectionBindGroup = createProjectionBindGroup(
-        projectPipelineMiddle,
+        computePipelines.projectStageTwoData.pipeline,
         div,
         pres,
         horiz,
         vert
       );
 
-      projectionPass.setPipeline(projectPipelineMiddle);
+      projectionPass.setPipeline(computePipelines.projectStageTwoData.pipeline);
       projectionPass.setBindGroup(0, projectionBindGroup);
       projectionPass.dispatchWorkgroups(textureSize / 8, textureSize / 8);
       projectionPass.end();
@@ -480,17 +365,19 @@ async function main() {
     horiz: DensityTextures,
     vert: DensityTextures
   ) {
-    const projectionPass = encoder.beginComputePass(projectEndPassDescriptor);
+    const projectionPass = encoder.beginComputePass(
+      computePipelines.projectStageThreeData.descriptor
+    );
 
     const projectionBindGroup = createProjectionBindGroup(
-      projectPipelineEnd,
+      computePipelines.projectStageThreeData.pipeline,
       div,
       pres,
       horiz,
       vert
     );
 
-    projectionPass.setPipeline(projectPipelineEnd);
+    projectionPass.setPipeline(computePipelines.projectStageThreeData.pipeline);
     projectionPass.setBindGroup(0, projectionBindGroup);
     projectionPass.dispatchWorkgroups(textureSize / 8, textureSize / 8);
     projectionPass.end();
@@ -513,9 +400,11 @@ async function main() {
     radius: number,
     intensity: number
   ) {
-    const splatPass = encoder.beginComputePass(splatPassDescriptor);
+    const splatPass = encoder.beginComputePass(
+      computePipelines.splatData.descriptor
+    );
 
-    splatUniforms.write({
+    computePipelines.splatData.uniforms.write({
       pos: vec2f(x, y),
       delta: vec2f(dx, dy),
       radius: radius,
@@ -524,11 +413,11 @@ async function main() {
     });
 
     const splatBindGroup = device!.createBindGroup({
-      layout: splatPipeline.getBindGroupLayout(0),
+      layout: computePipelines.splatData.pipeline.getBindGroupLayout(0),
       entries: [
         {
           binding: 0,
-          resource: splatUniforms,
+          resource: computePipelines.splatData.uniforms,
         },
         {
           binding: 1,
@@ -557,7 +446,7 @@ async function main() {
       ],
     });
 
-    splatPass.setPipeline(splatPipeline);
+    splatPass.setPipeline(computePipelines.splatData.pipeline);
     splatPass.setBindGroup(0, splatBindGroup);
     splatPass.dispatchWorkgroups(textureSize / 8, textureSize / 8);
     splatPass.end();
@@ -615,22 +504,8 @@ async function main() {
   function velocityUpdate(encoder: GPUCommandEncoder) {
     velx.swap();
     vely.swap();
-    tgpu.write(diffusionUniforms, {
-      diffusion_constant: 0.0001,
-      dt: 0.002,
-      grid_size: textureSize,
-      boundaryValue: 1,
-      h: 1.0 / textureSize,
-    });
 
     performDiffusion(encoder, velx, 0.0001, 0.02);
-    tgpu.write(diffusionUniforms, {
-      diffusion_constant: 0.0001,
-      dt: 0.002,
-      grid_size: textureSize,
-      boundaryValue: 2,
-      h: 1.0 / textureSize,
-    });
 
     performDiffusion(encoder, vely, 0.0001, 0.02);
     performProjection(encoder);
