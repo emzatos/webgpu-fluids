@@ -1,15 +1,12 @@
 import { f32, struct } from "typegpu/data/index";
 import shaders from "./shaders.wgsl?raw";
 import tgpu from "typegpu";
-import { FluidSimulation } from "./FluidSimulation";
-import { MouseHandler } from "./MouseHandler";
 
 export class Renderer {
   private device: GPUDevice;
   private context: GPUCanvasContext;
   private canvas: HTMLCanvasElement;
   private presentationFormat: GPUTextureFormat;
-  private textureSize: number;
   private renderPipeline!: GPURenderPipeline;
   private renderPassDescriptor!: GPURenderPassDescriptor & {
     colorAttachments: [GPURenderPassColorAttachment];
@@ -20,29 +17,19 @@ export class Renderer {
     HTMLCanvasElement,
     { width: number; height: number }
   >;
-  private simulation: FluidSimulation;
-  private mouseHandler: MouseHandler;
-  private observer!: ResizeObserver;
 
   constructor(
     device: GPUDevice,
     canvas: HTMLCanvasElement,
-    context: GPUCanvasContext,
-    simulation: FluidSimulation,
-    mouseHandler: MouseHandler,
-    textureSize: number
+    context: GPUCanvasContext
   ) {
     this.device = device;
     this.canvas = canvas;
     this.context = context;
-    this.simulation = simulation;
-    this.mouseHandler = mouseHandler;
     this.presentationFormat = navigator.gpu.getPreferredCanvasFormat();
     this.canvasToSizeMap = new WeakMap();
-    this.textureSize = textureSize;
 
     this.initializeRenderer(shaders);
-    this.setupResizeObserver();
   }
 
   private initializeRenderer(shaders: string): void {
@@ -120,50 +107,17 @@ export class Renderer {
     return needResize;
   }
 
-  private setupResizeObserver(): void {
-    this.observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        this.canvasToSizeMap.set(entry.target as HTMLCanvasElement, {
-          width: entry.contentBoxSize[0].inlineSize,
-          height: entry.contentBoxSize[0].blockSize,
-        });
-      }
-      this.render();
-    });
-
-    this.observer.observe(this.canvas);
-  }
-
-  public render = (): void => {
+  public render = (
+    encoder: GPUCommandEncoder,
+    textureView: GPUTextureView
+  ): void => {
     this.resizeCanvasToDisplaySize();
     // Update render pass descriptor with current texture view
     this.renderPassDescriptor.colorAttachments[0].view = this.context
       .getCurrentTexture()
       .createView();
 
-    const encoder = this.device.createCommandEncoder({
-      label: "command encoder",
-    });
-
-    // Handle mouse interaction
-    if (this.mouseHandler.mouseDown) {
-      this.simulation.splat(
-        encoder,
-        this.mouseHandler.mousePosition.x,
-        this.mouseHandler.mousePosition.y,
-        (this.mouseHandler.mousePosition.x -
-          this.mouseHandler.lastMousePosition.x) *
-          0.1,
-        (this.mouseHandler.mousePosition.y -
-          this.mouseHandler.lastMousePosition.y) *
-          0.1,
-        this.textureSize / 50,
-        1
-      );
-    }
-
     // Update simulation and uniforms
-    this.simulation.update(encoder);
     this.fragmentUniforms.write({ time: performance.now() / 2000 });
 
     // Create bind group for rendering
@@ -172,7 +126,7 @@ export class Renderer {
       entries: [
         {
           binding: 0,
-          resource: this.simulation.getDensityTexture().createView(),
+          resource: textureView,
         },
         {
           binding: 1,
@@ -191,21 +145,5 @@ export class Renderer {
     pass.setBindGroup(0, renderBindGroup);
     pass.draw(6);
     pass.end();
-
-    // Submit command buffer
-    const commandBuffer = encoder.finish();
-    this.device.queue.submit([commandBuffer]);
-
-    // Update mouse position
-    this.mouseHandler.lastMousePosition = {
-      x: this.mouseHandler.mousePosition.x,
-      y: this.mouseHandler.mousePosition.y,
-    };
-
-    requestAnimationFrame(this.render);
   };
-
-  public cleanup(): void {
-    this.observer.disconnect();
-  }
 }
