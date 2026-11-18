@@ -191,8 +191,8 @@ export class FluidSimulation {
   private velocityUpdate(encoder: GPUCommandEncoder) {
     this.velX.swap();
     this.velY.swap();
-    this.performDiffusion(encoder, this.velX, 0.0001, 0.002);
-    this.performDiffusion(encoder, this.velY, 0.0001, 0.002);
+    this.performDiffusion(encoder, this.velX, this.computePipelines.velocityDiffusionUniforms);
+    this.performDiffusion(encoder, this.velY, this.computePipelines.velocityDiffusionUniforms);
     this.performProjection(encoder);
     this.velX.swap();
     this.velY.swap();
@@ -213,7 +213,7 @@ export class FluidSimulation {
 
   private densityUpdate(encoder: GPUCommandEncoder) {
     this.densities.swap();
-    this.performDiffusion(encoder, this.densities, 0.0001, 0.02);
+    this.performDiffusion(encoder, this.densities, this.computePipelines.densityDiffusionUniforms);
     this.densities.swap();
     this.performAdvection(
       encoder,
@@ -227,17 +227,9 @@ export class FluidSimulation {
   private performDiffusion(
     encoder: GPUCommandEncoder,
     texture: DensityTextures,
-    diffusionConstant: number,
-    dt: number
+    uniforms: ComputePipelines["densityDiffusionUniforms"]
   ) {
-    this.computePipelines.diffusionData.uniforms.write({
-      diffusion_constant: diffusionConstant,
-      dt: dt,
-      grid_size: this.textureSize,
-      boundaryValue: 2,
-      h: 1.0 / this.textureSize,
-    });
-
+    const uniformBuffer = this.root.unwrap(uniforms);
     for (var i = 0; i < 20; i++) {
       const diffusionPass = encoder.beginComputePass(
         this.computePipelines.diffusionData.descriptor
@@ -249,7 +241,7 @@ export class FluidSimulation {
         entries: [
           {
             binding: 0,
-            resource: { buffer: this.root.unwrap(this.computePipelines.diffusionData.uniforms) },
+            resource: { buffer: uniformBuffer },
           },
           {
             binding: 1,

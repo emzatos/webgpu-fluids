@@ -6,6 +6,8 @@ import { d, type TgpuRoot } from "typegpu";
 
 export class ComputePipelines {
   readonly diffusionData;
+  readonly velocityDiffusionUniforms;
+  readonly densityDiffusionUniforms;
   readonly advectData;
   readonly projectStageOneData;
   readonly projectStageTwoData;
@@ -38,8 +40,15 @@ export class ComputePipelines {
     this.diffusionData = {
       pipeline: createPipeline(createModule("diffusion", diffuseShader), "diffuse"),
       descriptor: { label: "diffuse pass" },
-      uniforms: root.createBuffer(DiffusionUniforms).$usage("uniform"),
     };
+    const diffusionUniforms = (dt: number) => root.createBuffer(DiffusionUniforms, {
+      diffusion_constant: 0.0001,
+      dt,
+      grid_size: textureSize,
+      boundaryValue: 2,
+    }).$usage("uniform");
+    this.velocityDiffusionUniforms = diffusionUniforms(0.002);
+    this.densityDiffusionUniforms = diffusionUniforms(0.02);
     this.advectData = {
       pipeline: createPipeline(createModule("advection", advectShader), "advect"),
       descriptor: { label: "advect pass" },
@@ -60,12 +69,11 @@ export class ComputePipelines {
   }
 }
 
-export const DiffusionUniforms = d.struct({
+const DiffusionUniforms = d.struct({
   diffusion_constant: d.f32,
   dt: d.f32,
   grid_size: d.u32,
   boundaryValue: d.u32,
-  h: d.f32,
 });
 
 export const SplatUniforms = d.struct({
