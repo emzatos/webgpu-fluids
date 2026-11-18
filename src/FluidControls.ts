@@ -1,6 +1,7 @@
 import { useControls, Leva } from "leva";
 import { settings } from "./settings";
 import { createElement } from "react";
+import type { PressureIterations } from "./FluidSimulation";
 
 export function FluidControls() {
     useControls({
@@ -13,6 +14,11 @@ export function FluidControls() {
             value: settings.dyeSize,
             options: { "256 × 256": 256, "512 × 512": 512 },
             onChange: (value: number) => { settings.dyeSize = value; },
+        },
+        "Pressure quality": {
+            value: settings.pressureIterations,
+            options: { Fast: 40, Balanced: 80, High: 200 },
+            onChange: (value: PressureIterations) => { settings.pressureIterations = value; },
         },
         "Brush size": {
             value: settings.brushRadius,

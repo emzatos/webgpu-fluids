@@ -69,7 +69,7 @@ async function main() {
           settings.brushRadius, 1, step
         );
       }
-      simulation.update(encoder);
+      simulation.update(encoder, settings.pressureIterations);
     }
     renderer.render(frame, simulation.getDensityView(), settings.palette);
 

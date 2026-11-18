@@ -1,5 +1,5 @@
 import { tgpu, type TgpuRoot } from "typegpu";
-import { FluidSimulation } from "../src/FluidSimulation";
+import { FluidSimulation, type PressureIterations } from "../src/FluidSimulation";
 import type { DyeTransport } from "../src/DyeAdvection";
 import { Renderer } from "../src/Renderer";
 
@@ -25,6 +25,7 @@ const scene = document.querySelector<HTMLSelectElement>("#scene")!;
 const transport = document.querySelector<HTMLSelectElement>("#transport")!;
 const diffusion = document.querySelector<HTMLSelectElement>("#diffusion")!;
 const resolution = document.querySelector<HTMLSelectElement>("#resolution")!;
+const pressure = document.querySelector<HTMLSelectElement>("#pressure")!;
 
 function percentile(values: number[], fraction: number) {
   return [...values].sort((a, b) => a - b)[Math.ceil(values.length * fraction) - 1].toFixed(2);
@@ -75,6 +76,7 @@ runButton.addEventListener("click", async () => {
   transport.disabled = true;
   diffusion.disabled = true;
   resolution.disabled = true;
+  pressure.disabled = true;
   results.textContent = "Running stroke replay…";
   let device: GPUDevice | undefined;
 
@@ -83,6 +85,7 @@ runButton.addEventListener("click", async () => {
     device = root.device;
     device.pushErrorScope("validation");
     const dyeSize = Number(resolution.value);
+    const pressureIterations = Number(pressure.value) as PressureIterations;
     const simulation = new FluidSimulation(root, GRID, {
       startEmpty: true,
       dyeTransport: transport.value as DyeTransport,
@@ -105,7 +108,7 @@ runButton.addEventListener("click", async () => {
         const [previousX, previousY] = position(Math.max(0, step - 1) / (STROKE_STEPS - 1));
         simulation.splat(encoder, { x: previousX, y: previousY }, { x, y }, 3, 1);
       }
-      simulation.update(encoder);
+      simulation.update(encoder, pressureIterations);
       renderer.render(frame, simulation.getDensityView(), 1);
       frame.submit();
       const submitted = performance.now();
@@ -172,6 +175,7 @@ runButton.addEventListener("click", async () => {
     transport.disabled = false;
     diffusion.disabled = false;
     resolution.disabled = false;
+    pressure.disabled = false;
     // Allow the last submitted image to be presented before releasing test resources.
     if (device) {
       const finishedDevice = device;

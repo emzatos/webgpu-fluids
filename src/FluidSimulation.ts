@@ -8,7 +8,8 @@ import { d, type TgpuBindGroup, type TgpuRoot } from "typegpu";
 
 const WORKGROUP_SIZE = 8;
 const DEFAULT_DIFFUSION_ITERATIONS = 2;
-const PRESSURE_ITERATIONS = 200;
+export const DEFAULT_PRESSURE_ITERATIONS = 80;
+export type PressureIterations = 40 | 80 | 200;
 
 interface SimulationOptions {
   startEmpty?: boolean;
@@ -118,8 +119,11 @@ export class FluidSimulation {
     return [velX, velY];
   };
 
-  public update(encoder: GPUCommandEncoder) {
-    this.velocityUpdate(encoder);
+  public update(
+    encoder: GPUCommandEncoder,
+    pressureIterations: PressureIterations = DEFAULT_PRESSURE_ITERATIONS
+  ) {
+    this.velocityUpdate(encoder, pressureIterations);
     this.densityUpdate(encoder);
   }
 
@@ -188,17 +192,17 @@ export class FluidSimulation {
     this.velY.flip();
   }
 
-  private velocityUpdate(encoder: GPUCommandEncoder) {
+  private velocityUpdate(encoder: GPUCommandEncoder, pressureIterations: PressureIterations) {
     const { horizontal, vertical } = this.computePipelines.fieldUniforms;
     this.performDiffusion(encoder, this.velX, horizontal.diffusion);
     this.performDiffusion(encoder, this.velY, vertical.diffusion);
-    this.performProjection(encoder);
+    this.performProjection(encoder, pressureIterations);
 
     const horizontalSource = this.velX.readView;
     const verticalSource = this.velY.readView;
     this.performAdvection(encoder, this.velX, horizontalSource, verticalSource, horizontal.advection);
     this.performAdvection(encoder, this.velY, horizontalSource, verticalSource, vertical.advection);
-    this.performProjection(encoder);
+    this.performProjection(encoder, pressureIterations);
   }
 
   private densityUpdate(encoder: GPUCommandEncoder) {
@@ -268,7 +272,7 @@ export class FluidSimulation {
     field.flip();
   }
 
-  private performProjection(encoder: GPUCommandEncoder) {
+  private performProjection(encoder: GPUCommandEncoder, pressureIterations: PressureIterations) {
     const { divergence, pressure, velX, velY } = this;
     const { divergencePipeline, pressurePipeline, projectionPipeline, projectionUniforms } =
       this.computePipelines;
@@ -300,12 +304,11 @@ export class FluidSimulation {
     ];
     const pressurePass = encoder.beginComputePass({ label: "pressure" });
     pressurePass.setPipeline(pressurePipeline);
-    for (let i = 0; i < PRESSURE_ITERATIONS; i++) {
+    for (let i = 0; i < pressureIterations; i++) {
       pressurePass.setBindGroup(0, groups[i % 2]);
       pressurePass.dispatchWorkgroups(this.workgroups, this.workgroups);
     }
     pressurePass.end();
-    if (PRESSURE_ITERATIONS % 2 !== 0) pressure.flip();
 
     const projectionGroup = this.computeGroup(
       projectionPipeline,
