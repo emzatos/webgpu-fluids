@@ -4,9 +4,14 @@ struct VertexOutput {
     @location(0) uv : vec2f
 }
 
+struct FragmentUniforms {
+    time: f32,
+    palette: u32,
+}
+
 @group(0) @binding(0) var tex: texture_2d<f32>;
 @group(0) @binding(1) var samp: sampler;
-@group(0) @binding(2) var<uniform> time : f32;  // Add time as a uniform
+@group(0) @binding(2) var<uniform> uniforms : FragmentUniforms;  // Add time as a uniform
 
 @vertex fn vs (
     @builtin(vertex_index) vertexIndex : u32
@@ -35,10 +40,30 @@ struct VertexOutput {
 }
 
 @fragment fn fs(vin: VertexOutput) -> @location(0) vec4f { 
-    _ = time;
+    _ = uniforms.time;
+    let palette = uniforms.palette;
     let value = textureSample(tex, samp, vec2f(vin.uv)).r;
+    var color: vec3<f32>;
+    switch (palette) {
+        case 0: {
+            color = hsl_to_rgb(value * 360.0, 1.0, 0.5);
+            break;
+        }
+        case 1: {
+            color = vec3<f32>(value, value, value);
+            break;
+        }
+        case 2: {
+            color = vec3<f32>(1.0 - value, 1.0 - value, 1.0 - value);
+            break;
+        }
+        default: {
+            color = vec3<f32>(0.0, 0.0, 0.0);
+            break;
+        }
+    }
     //rainbow
-   var color: vec3<f32> = hsl_to_rgb(value * 360.0, 1.0, 0.5);
+        // var color: vec3<f32> = hsl_to_rgb(value * 360.0, 1.0, 0.5);
    // black background with white fluid
  //   var color: vec3<f32> = vec3<f32>(value, value, value);
    // white background with black fluid

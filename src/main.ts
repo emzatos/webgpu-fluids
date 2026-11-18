@@ -2,6 +2,15 @@ import "./style.css";
 import { MouseHandler } from "./MouseHandler";
 import { FluidSimulation } from "./FluidSimulation";
 import { Renderer } from "./Renderer";
+import { settings } from "./settings";
+import { createElement } from "react";
+import { createRoot } from "react-dom/client";
+import { FluidControls } from "./FluidControls";
+
+const controlsRoot = document.getElementById("fluid-controls");
+if (controlsRoot) {
+  createRoot(controlsRoot).render(createElement(FluidControls));
+}
 
 async function main() {
   const adapter = await navigator.gpu?.requestAdapter();
@@ -66,13 +75,13 @@ async function main() {
         mouseHandler.mousePosition.y,
         (mouseHandler.mousePosition.x - mouseHandler.lastMousePosition.x) * 0.1,
         (mouseHandler.mousePosition.y - mouseHandler.lastMousePosition.y) * 0.1,
-        textureSize / 50,
+        settings.brushRadius,
         1
       );
     }
 
     simulation.update(encoder);
-    renderer.render(encoder, simulation.getDensityTexture().createView());
+    renderer.render(encoder, simulation.getDensityTexture().createView(), settings.palette);
 
     const commandBuffer = encoder.finish();
     device!.queue.submit([commandBuffer]);

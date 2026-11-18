@@ -1,4 +1,4 @@
-import { f32, struct } from "typegpu/data/index";
+import { u32, f32, struct } from "typegpu/data/index";
 import shaders from "./shaders.wgsl?raw";
 import tgpu from "typegpu";
 
@@ -78,6 +78,7 @@ export class Renderer {
 
     const FragmentUniforms = struct({
       time: f32,
+      palette: u32,
     });
 
     this.fragmentUniforms = tgpu
@@ -109,7 +110,8 @@ export class Renderer {
 
   public render = (
     encoder: GPUCommandEncoder,
-    textureView: GPUTextureView
+    textureView: GPUTextureView,
+    palette: number
   ): void => {
     this.resizeCanvasToDisplaySize();
     // Update render pass descriptor with current texture view
@@ -118,7 +120,7 @@ export class Renderer {
       .createView();
 
     // Update simulation and uniforms
-    this.fragmentUniforms.write({ time: performance.now() / 2000 });
+    this.fragmentUniforms.write({ time: performance.now() / 2000, palette: u32(palette) });
 
     // Create bind group for rendering
     const renderBindGroup = this.device.createBindGroup({
