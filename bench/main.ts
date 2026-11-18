@@ -22,6 +22,7 @@ const results = document.querySelector<HTMLPreElement>("#results")!;
 const runButton = document.querySelector<HTMLButtonElement>("#run")!;
 const scene = document.querySelector<HTMLSelectElement>("#scene")!;
 const transport = document.querySelector<HTMLSelectElement>("#transport")!;
+const diffusion = document.querySelector<HTMLSelectElement>("#diffusion")!;
 
 function percentile(values: number[], fraction: number) {
   return [...values].sort((a, b) => a - b)[Math.ceil(values.length * fraction) - 1].toFixed(2);
@@ -53,6 +54,7 @@ runButton.addEventListener("click", async () => {
   runButton.disabled = true;
   scene.disabled = true;
   transport.disabled = true;
+  diffusion.disabled = true;
   results.textContent = "Running stroke replay…";
   let device: GPUDevice | undefined;
 
@@ -63,6 +65,7 @@ runButton.addEventListener("click", async () => {
     const simulation = new FluidSimulation(root, GRID, {
       startEmpty: true,
       dyeTransport: transport.value as DyeTransport,
+      diffusionIterations: Number(diffusion.value),
     });
     const renderer = new Renderer(root, root.configureContext({ canvas }));
     const stroke = strokes[scene.value as keyof typeof strokes];
@@ -140,6 +143,7 @@ runButton.addEventListener("click", async () => {
     runButton.disabled = false;
     scene.disabled = false;
     transport.disabled = false;
+    diffusion.disabled = false;
     // Allow the last submitted image to be presented before releasing test resources.
     if (device) {
       const finishedDevice = device;

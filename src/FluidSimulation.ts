@@ -6,7 +6,7 @@ import {
 import { d, type TgpuBindGroup, type TgpuRoot } from "typegpu";
 
 const WORKGROUP_SIZE = 8;
-const DIFFUSION_ITERATIONS = 20;
+const DEFAULT_DIFFUSION_ITERATIONS = 2;
 const PRESSURE_ITERATIONS = 200;
 
 export type DyeTransport = "linear" | "maccormack";
@@ -14,12 +14,14 @@ export type DyeTransport = "linear" | "maccormack";
 interface SimulationOptions {
   startEmpty?: boolean;
   dyeTransport?: DyeTransport;
+  diffusionIterations?: number;
 }
 
 export class FluidSimulation {
   private device: GPUDevice;
   private readonly workgroups: number;
   private readonly dyeAdvection?: DyeAdvection;
+  private readonly diffusionIterations: number;
   private densities: DensityTextures;
   private velX: DensityTextures;
   private velY: DensityTextures;
@@ -34,8 +36,16 @@ export class FluidSimulation {
   constructor(
     private readonly root: TgpuRoot,
     private readonly textureSize: number,
-    { startEmpty = false, dyeTransport = "maccormack" }: SimulationOptions = {}
+    {
+      startEmpty = false,
+      dyeTransport = "maccormack",
+      diffusionIterations = DEFAULT_DIFFUSION_ITERATIONS,
+    }: SimulationOptions = {}
   ) {
+    if (!Number.isSafeInteger(diffusionIterations) || diffusionIterations < 1) {
+      throw new Error("Diffusion iterations must be a positive integer.");
+    }
+    this.diffusionIterations = diffusionIterations;
     const { device } = root;
     this.device = device;
     this.workgroups = Math.ceil(textureSize / WORKGROUP_SIZE);
@@ -219,12 +229,12 @@ export class FluidSimulation {
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, firstGroup);
     pass.dispatchWorkgroups(this.workgroups, this.workgroups);
-    for (let i = 1; i < DIFFUSION_ITERATIONS; i++) {
+    for (let i = 1; i < this.diffusionIterations; i++) {
       pass.setBindGroup(0, groups[i % 2]);
       pass.dispatchWorkgroups(this.workgroups, this.workgroups);
     }
     pass.end();
-    if (DIFFUSION_ITERATIONS % 2 === 0) field.swapWriteAndScratch();
+    if (this.diffusionIterations % 2 === 0) field.swapWriteAndScratch();
     field.flip();
   }
 
