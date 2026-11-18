@@ -27,8 +27,9 @@ const diffusion = document.querySelector<HTMLSelectElement>("#diffusion")!;
 const resolution = document.querySelector<HTMLSelectElement>("#resolution")!;
 const pressure = document.querySelector<HTMLSelectElement>("#pressure")!;
 
-function percentile(values: number[], fraction: number) {
-  return [...values].sort((a, b) => a - b)[Math.ceil(values.length * fraction) - 1].toFixed(2);
+function percentile(values: number[], fraction: number, showResolution = false) {
+  const value = [...values].sort((a, b) => a - b)[Math.ceil(values.length * fraction) - 1].toFixed(2);
+  return showResolution && value === "0.00" ? "<0.01" : value;
 }
 
 async function readFields(device: GPUDevice, textures: GPUTexture[]) {
@@ -53,6 +54,36 @@ async function readFields(device: GPUDevice, textures: GPUTexture[]) {
   }));
 }
 
+function createDyeTimer(device: GPUDevice) {
+  if (!device.features.has("timestamp-query")) return;
+  const querySet = device.createQuerySet({ type: "timestamp", count: 2 });
+  const resolved = device.createBuffer({
+    size: 16, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
+  });
+  const readback = device.createBuffer({
+    size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  });
+  const timestampWrites = {
+    querySet, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1,
+  };
+  return {
+    timestampWrites,
+    resolve(encoder: GPUCommandEncoder) {
+      encoder.resolveQuerySet(querySet, 0, 2, resolved, 0);
+      encoder.copyBufferToBuffer(resolved, 0, readback, 0, 16);
+    },
+    async milliseconds() {
+      await readback.mapAsync(GPUMapMode.READ);
+      try {
+        const [start, end] = new BigUint64Array(readback.getMappedRange());
+        return Number(end - start) / 1e6;
+      } finally {
+        readback.unmap();
+      }
+    },
+  };
+}
+
 async function verifyBrush(root: TgpuRoot) {
   const simulation = new FluidSimulation(root, 16, { startEmpty: true });
   try {
@@ -61,7 +92,7 @@ async function verifyBrush(root: TgpuRoot) {
     simulation.splat(encoder, { x: 3, y: 12 }, { x: 13, y: 12 }, 2, 1, 1);
     root.device.queue.submit([encoder.finish()]);
     const [{ values, stride }] = await readFields(root.device, [simulation.getDensityTexture()]);
-    if (values[4 * stride + 8] < 0.9 || values[12 * stride + 8] < 0.9
+    if (!(values[4 * stride + 8] >= 0.9) || !(values[12 * stride + 8] >= 0.9)
         || values[8 * stride + 8] !== 0) {
       throw Error("Brush test failed. Expected two separate, continuous strokes in one submission.");
     }
@@ -81,7 +112,9 @@ runButton.addEventListener("click", async () => {
   let device: GPUDevice | undefined;
 
   try {
-    const root = await tgpu.init({ device: { requiredFeatures: ["float32-filterable"] } });
+    const root = await tgpu.init({
+      device: { requiredFeatures: ["float32-filterable"], optionalFeatures: ["timestamp-query"] },
+    });
     device = root.device;
     device.pushErrorScope("validation");
     const dyeSize = Number(resolution.value);
@@ -97,6 +130,8 @@ runButton.addEventListener("click", async () => {
     const position = (t: number) => stroke(t).map((coordinate) => 1 + coordinate * (GRID - 1));
     const encoding: number[] = [];
     const completion: number[] = [];
+    const dyeTimes: number[] = [];
+    const timer = createDyeTimer(device);
 
     for (let step = -WARMUP_STEPS; step < STROKE_STEPS + SETTLE_STEPS; step++) {
       await new Promise(requestAnimationFrame);
@@ -108,14 +143,16 @@ runButton.addEventListener("click", async () => {
         const [previousX, previousY] = position(Math.max(0, step - 1) / (STROKE_STEPS - 1));
         simulation.splat(encoder, { x: previousX, y: previousY }, { x, y }, 3, 1);
       }
-      simulation.update(encoder, pressureIterations);
+      simulation.update(encoder, pressureIterations, step >= 0 ? timer?.timestampWrites : undefined);
       renderer.render(frame, simulation.getDensityView(), 1);
+      if (step >= 0) timer?.resolve(encoder);
       frame.submit();
       const submitted = performance.now();
       await device.queue.onSubmittedWorkDone();
       if (step >= 0) {
         encoding.push(submitted - start);
         completion.push(performance.now() - submitted);
+        if (timer) dyeTimes.push(await timer.milliseconds());
       }
     }
 
@@ -166,6 +203,9 @@ runButton.addEventListener("click", async () => {
       `Dye mass: ${mass.toFixed(3)} · peak: ${peak.toFixed(4)}`,
       `Dye edge variation / mass: ${(gradient / mass).toFixed(5)}`,
       `RMS velocity divergence: ${Math.sqrt(divergenceSquares / GRID ** 2).toFixed(4)}`,
+      dyeTimes.length
+        ? `GPU dye advection: ${percentile(dyeTimes, 0.5, true)} ms median · ${percentile(dyeTimes, 0.95, true)} ms p95`
+        : "GPU dye advection timing is unavailable on this browser or device.",
     ].join("\n");
   } catch (error) {
     results.textContent = `FAIL · ${error instanceof Error ? error.message : String(error)}`;

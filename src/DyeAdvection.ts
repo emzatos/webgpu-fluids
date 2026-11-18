@@ -116,7 +116,8 @@ export class DyeAdvection {
     predicted: GPUTextureView,
     output: GPUTextureView,
     horizontal: GPUTextureView,
-    vertical: GPUTextureView
+    vertical: GPUTextureView,
+    timestampWrites?: GPUComputePassTimestampWrites
   ) {
     const views = [source, predicted, output, horizontal, vertical];
     let bindings = this.cache.find((entry) => views.every((view, i) => view === entry.views[i]));
@@ -135,7 +136,7 @@ export class DyeAdvection {
     }
 
     const groups = Math.ceil((dyeSize + 2) / WORKGROUP_SIZE);
-    const pass = encoder.beginComputePass({ label: "dye advection" });
+    const pass = encoder.beginComputePass({ label: "dye advection", timestampWrites });
     this.predict.with(bindings.prediction).with(pass).dispatchWorkgroups(groups, groups);
     if (this.correct && bindings.correction && bindings.predicted) {
       this.correct.with(bindings.correction).with(bindings.predicted).with(pass).dispatchWorkgroups(groups, groups);

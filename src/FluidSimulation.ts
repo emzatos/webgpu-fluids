@@ -121,10 +121,11 @@ export class FluidSimulation {
 
   public update(
     encoder: GPUCommandEncoder,
-    pressureIterations: PressureIterations = DEFAULT_PRESSURE_ITERATIONS
+    pressureIterations: PressureIterations = DEFAULT_PRESSURE_ITERATIONS,
+    dyeTimestamps?: GPUComputePassTimestampWrites
   ) {
     this.velocityUpdate(encoder, pressureIterations);
-    this.densityUpdate(encoder);
+    this.densityUpdate(encoder, dyeTimestamps);
   }
 
   public splat(
@@ -205,12 +206,12 @@ export class FluidSimulation {
     this.performProjection(encoder, pressureIterations);
   }
 
-  private densityUpdate(encoder: GPUCommandEncoder) {
+  private densityUpdate(encoder: GPUCommandEncoder, timestamps?: GPUComputePassTimestampWrites) {
     const { density } = this.computePipelines.fieldUniforms;
     this.performDiffusion(encoder, this.densities, density);
     const { readView, prevView, writeView } = this.densities;
     this.dyeAdvection.advect(
-      encoder, this.dyeSize, readView, prevView, writeView, this.velX.readView, this.velY.readView
+      encoder, this.dyeSize, readView, prevView, writeView, this.velX.readView, this.velY.readView, timestamps
     );
     this.densities.flip();
   }
