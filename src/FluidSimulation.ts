@@ -1,6 +1,6 @@
 import { DensityTextures } from "./DensityTextures";
 import {
-  ComputePipelines, divergenceLayout, pressureLayout, projectionLayout,
+  ComputePipelines, diffusionLayout, divergenceLayout, pressureLayout, projectionLayout,
 } from "./ComputePipelines";
 import { d, type TgpuBindGroup, type TgpuRoot } from "typegpu";
 
@@ -18,7 +18,7 @@ export class FluidSimulation {
   private pressure: DensityTextures;
   private computePipelines: ComputePipelines;
   private sampler: GPUSampler;
-  private readonly projectionGroups = new Map<
+  private readonly computeGroups = new Map<
     GPUComputePipeline, { views: readonly GPUTextureView[]; group: GPUBindGroup }[]
   >();
 
@@ -182,29 +182,26 @@ export class FluidSimulation {
     uniforms: ComputePipelines["fieldUniforms"]["density"]["diffusion"]
   ) {
     const { pipeline, descriptor } = this.computePipelines.diffusionData;
-    const uniformBuffer = this.root.unwrap(uniforms);
     const source = field.readView;
-    let estimate = source;
-    let output = field.writeView;
-    for (let i = 0; i < DIFFUSION_ITERATIONS; i++) {
-      const pass = encoder.beginComputePass(descriptor);
-      const group = this.device.createBindGroup({
-        layout: pipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: uniformBuffer } },
-          { binding: 1, resource: estimate },
-          { binding: 2, resource: output },
-          { binding: 3, resource: source },
-        ],
-      });
-      pass.setPipeline(pipeline);
-      pass.setBindGroup(0, group);
+    const firstOutput = field.writeView;
+    const secondOutput = field.prevView;
+    const groupFor = (estimate: GPUTextureView, output: GPUTextureView) =>
+      this.computeGroup(pipeline, [estimate, output, source], ([estimate, output, source]) =>
+        this.root.createBindGroup(diffusionLayout, { uniforms, estimate, output, source })
+      );
+    const firstGroup = groupFor(source, firstOutput);
+    const groups = [groupFor(secondOutput, firstOutput), groupFor(firstOutput, secondOutput)];
+
+    const pass = encoder.beginComputePass(descriptor);
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, firstGroup);
+    pass.dispatchWorkgroups(this.workgroups, this.workgroups);
+    for (let i = 1; i < DIFFUSION_ITERATIONS; i++) {
+      pass.setBindGroup(0, groups[i % 2]);
       pass.dispatchWorkgroups(this.workgroups, this.workgroups);
-      pass.end();
-      estimate = output;
-      output = output === field.writeView ? field.prevView : field.writeView;
     }
-    if (estimate === field.prevView) field.swapWriteAndScratch();
+    pass.end();
+    if (DIFFUSION_ITERATIONS % 2 === 0) field.swapWriteAndScratch();
     field.flip();
   }
 
@@ -239,7 +236,7 @@ export class FluidSimulation {
     const { divergence, pressure, velX, velY } = this;
     const { divergencePipeline, pressurePipeline, projectionPipeline, projectionUniforms } =
       this.computePipelines;
-    const divergenceGroup = this.projectionGroup(
+    const divergenceGroup = this.computeGroup(
       divergencePipeline,
       [divergence.writeView, pressure.readView, pressure.writeView, velX.readView, velY.readView],
       ([divergenceOutput, previousPressure, pressureOutput, horizontal, vertical]) =>
@@ -253,7 +250,7 @@ export class FluidSimulation {
     divergence.flip();
 
     const pressureGroup = (input: GPUTextureView, output: GPUTextureView) =>
-      this.projectionGroup(
+      this.computeGroup(
         pressurePipeline,
         [divergence.readView, input, output],
         ([divergence, pressure, pressureOutput]) =>
@@ -274,7 +271,7 @@ export class FluidSimulation {
     pressurePass.end();
     if (PRESSURE_ITERATIONS % 2 !== 0) pressure.flip();
 
-    const projectionGroup = this.projectionGroup(
+    const projectionGroup = this.computeGroup(
       projectionPipeline,
       [pressure.readView, velX.readView, velX.writeView, velY.readView, velY.writeView],
       ([pressure, horizontal, horizontalOutput, vertical, verticalOutput]) =>
@@ -288,15 +285,15 @@ export class FluidSimulation {
     velY.flip();
   }
 
-  private projectionGroup<T extends GPUTextureView[]>(
+  private computeGroup<T extends GPUTextureView[]>(
     pipeline: GPUComputePipeline,
     views: T,
     create: (views: T) => TgpuBindGroup
   ): GPUBindGroup {
-    let groups = this.projectionGroups.get(pipeline);
+    let groups = this.computeGroups.get(pipeline);
     if (!groups) {
       groups = [];
-      this.projectionGroups.set(pipeline, groups);
+      this.computeGroups.set(pipeline, groups);
     }
     const cached = groups.find((entry) => views.every((view, i) => view === entry.views[i]));
     if (cached) return cached.group;

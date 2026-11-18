@@ -37,7 +37,7 @@ export class ComputePipelines {
     }).$usage("uniform");
 
     this.diffusionData = {
-      pipeline: createPipeline(createModule("diffusion", diffuseShader), "diffuse"),
+      pipeline: createPipeline(createModule("diffusion", diffuseShader), "diffuse", diffusionLayout),
       descriptor: { label: "diffuse pass" },
     };
     const fieldUniforms = (boundaryValue: number, diffusionDt: number) => ({
@@ -93,6 +93,13 @@ const ProjectionUniforms = d.struct({ grid_size: d.u32 });
 const projectionUniform = { uniform: ProjectionUniforms };
 const readField = { texture: d.texture2d(d.f32), sampleType: "unfilterable-float" as const };
 const writeField = { storageTexture: d.textureStorage2d("r32float") };
+
+export const diffusionLayout = tgpu.bindGroupLayout({
+  uniforms: { uniform: DiffusionUniforms },
+  estimate: readField,
+  output: writeField,
+  source: readField,
+});
 
 // Keep the binding indices in sync with project.wgsl. Null entries reserve unused slots.
 export const divergenceLayout = tgpu.bindGroupLayout({
