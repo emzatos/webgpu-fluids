@@ -2,15 +2,18 @@ export class DensityTextures {
   readTexture: GPUTexture;
   writeTexture: GPUTexture;
   prevTexture: GPUTexture;
+  private readonly views = new Map<GPUTexture, GPUTextureView>();
 
   constructor({
     device,
     textureSize,
     data,
+    initialRadius = 20,
   }: {
     device: GPUDevice;
     textureSize: number;
     data?: Float32Array;
+    initialRadius?: number;
   }) {
     const descriptor: GPUTextureDescriptor = {
       label: "storage texture",
@@ -23,7 +26,7 @@ export class DensityTextures {
         GPUTextureUsage.COPY_DST,
     };
 
-    const textureData = data ?? this.initializeData(textureSize);
+    const textureData = data ?? this.initializeData(textureSize, initialRadius);
 
     const textures = Array.from({ length: 3 }).map(() => {
       const texture = device.createTexture(descriptor);
@@ -37,6 +40,7 @@ export class DensityTextures {
         { width: textureSize, height: textureSize }
       );
 
+      this.views.set(texture, texture.createView());
       return texture;
     });
 
@@ -45,7 +49,23 @@ export class DensityTextures {
     this.prevTexture = textures[2];
   }
 
-  initializeData(textureSize: number) {
+  get readView() {
+    return this.views.get(this.readTexture)!;
+  }
+
+  get writeView() {
+    return this.views.get(this.writeTexture)!;
+  }
+
+  get prevView() {
+    return this.views.get(this.prevTexture)!;
+  }
+
+  destroy() {
+    for (const texture of this.views.keys()) texture.destroy();
+  }
+
+  private initializeData(textureSize: number, radius: number) {
     const N = textureSize - 2;
     const textureData = new Float32Array((N + 2) * (N + 2));
     for (let x = 1; x <= N; ++x) {
@@ -53,7 +73,7 @@ export class DensityTextures {
         const dx = x - (N + 2) / 2;
         const dy = y - (N + 2) / 2;
         const dist = Math.hypot(dx, dy);
-        if (dist < 20) {
+        if (dist < radius) {
           textureData[y * (N + 2) + x] = 1;
         }
       }
@@ -69,17 +89,11 @@ export class DensityTextures {
     ];
   }
 
-  swap() {
+  swapWriteAndScratch() {
     [this.prevTexture, this.writeTexture] = [
       this.writeTexture,
       this.prevTexture,
     ];
   }
 
-  setAll() {
-    [this.readTexture, this.prevTexture] = [
-      this.writeTexture,
-      this.writeTexture,
-    ];
-  }
 }

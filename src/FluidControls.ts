@@ -1,13 +1,24 @@
-import { useControls, Leva } from "leva";
+import { useControls, Leva, button } from "leva";
 import { settings } from "./settings";
 import { createElement } from "react";
+import type { PressureIterations } from "./FluidSimulation";
 
 export function FluidControls() {
     useControls({
         "Color scheme": {
             value: settings.palette,
-            options: { Rainbow: 0, "White on black": 1, "Black on white": 2},
+            options: { Rainbow: 0, Ember: 3, "White on black": 1, "Black on white": 2 },
             onChange: (value: number) => { settings.palette = value; },
+        },
+        "Dye resolution (resets fluid)": {
+            value: settings.dyeSize,
+            options: { "256 × 256": 256, "512 × 512": 512 },
+            onChange: (value: number) => { settings.dyeSize = value; },
+        },
+        "Pressure quality": {
+            value: settings.pressureIterations,
+            options: { Fast: 40, Balanced: 80, High: 200 },
+            onChange: (value: PressureIterations) => { settings.pressureIterations = value; },
         },
         "Brush size": {
             value: settings.brushRadius,
@@ -16,6 +27,7 @@ export function FluidControls() {
             step: 0.01,
             onChange: (value: number) => { settings.brushRadius = value; },
         },
+        "Reset": button(() => { settings.resetRequested = true; }),
     });
     return createElement(Leva)
 }

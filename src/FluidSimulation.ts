@@ -1,10 +1,29 @@
+import { DyeAdvection, type DyeTransport } from "./DyeAdvection";
+import type { BrushPoint } from "./BrushInput";
 import { DensityTextures } from "./DensityTextures";
-import { ComputePipelines } from "./ComputePipelines";
-import { vec2f } from "typegpu/data/index";
+import {
+  ADVECTION_DT, ComputePipelines, diffusionLayout, divergenceLayout, pressureLayout, projectionLayout,
+} from "./ComputePipelines";
+import { d, type TgpuBindGroup, type TgpuRoot } from "typegpu";
+
+const WORKGROUP_SIZE = 8;
+const DEFAULT_DIFFUSION_ITERATIONS = 2;
+export const DEFAULT_PRESSURE_ITERATIONS = 80;
+export type PressureIterations = 40 | 80 | 200;
+
+interface SimulationOptions {
+  startEmpty?: boolean;
+  dyeTransport?: DyeTransport;
+  dyeSize?: number;
+  diffusionIterations?: number;
+}
 
 export class FluidSimulation {
   private device: GPUDevice;
-  private textureSize: number;
+  private readonly workgroups: number;
+  private readonly dyeAdvection: DyeAdvection;
+  private readonly dyeSize: number;
+  private readonly diffusionIterations: number;
   private densities: DensityTextures;
   private velX: DensityTextures;
   private velY: DensityTextures;
@@ -12,22 +31,42 @@ export class FluidSimulation {
   private pressure: DensityTextures;
   private computePipelines: ComputePipelines;
   private sampler: GPUSampler;
+  private readonly computeGroups = new Map<
+    GPUComputePipeline, { views: readonly GPUTextureView[]; group: GPUBindGroup }[]
+  >();
 
-  constructor(device: GPUDevice, textureSize: number) {
+  constructor(
+    private readonly root: TgpuRoot,
+    private readonly textureSize: number,
+    {
+      startEmpty = false,
+      dyeTransport = "maccormack",
+      dyeSize = textureSize,
+      diffusionIterations = DEFAULT_DIFFUSION_ITERATIONS,
+    }: SimulationOptions = {}
+  ) {
+    if (!Number.isSafeInteger(diffusionIterations) || diffusionIterations < 1) {
+      throw new Error("Diffusion iterations must be a positive integer.");
+    }
+    this.diffusionIterations = diffusionIterations;
+    this.dyeSize = dyeSize;
+    const { device } = root;
     this.device = device;
-    this.textureSize = textureSize;
+    this.workgroups = Math.ceil(textureSize / WORKGROUP_SIZE);
     this.sampler = device.createSampler({
       magFilter: "linear",
       minFilter: "linear",
     });
-    var [velXData, velYData] = this.initializeVelocity(textureSize);
-    var zeroData = new Float32Array({
-      length: (textureSize + 2) * (textureSize + 2),
-    }).fill(0.0);
+    const zeroData = new Float32Array((textureSize + 2) ** 2);
+    const [velXData, velYData] = startEmpty
+      ? [zeroData, zeroData]
+      : this.initializeVelocity(textureSize);
 
     this.densities = new DensityTextures({
       device,
-      textureSize: textureSize + 2,
+      textureSize: dyeSize + 2,
+      data: startEmpty ? new Float32Array((dyeSize + 2) ** 2) : undefined,
+      initialRadius: 20 * dyeSize / textureSize,
     });
 
     this.velX = new DensityTextures({
@@ -54,7 +93,8 @@ export class FluidSimulation {
       data: zeroData,
     });
 
-    this.computePipelines = new ComputePipelines(device, textureSize);
+    this.computePipelines = new ComputePipelines(root, textureSize, dyeSize);
+    this.dyeAdvection = new DyeAdvection(root, ADVECTION_DT, dyeTransport);
   }
 
   private initializeVelocity = (
@@ -79,423 +119,252 @@ export class FluidSimulation {
     return [velX, velY];
   };
 
-  public update(encoder: GPUCommandEncoder) {
-    this.velocityUpdate(encoder);
-    this.densityUpdate(encoder);
+  public update(
+    encoder: GPUCommandEncoder,
+    pressureIterations: PressureIterations = DEFAULT_PRESSURE_ITERATIONS,
+    dyeTimestamps?: GPUComputePassTimestampWrites
+  ) {
+    this.velocityUpdate(encoder, pressureIterations);
+    this.densityUpdate(encoder, dyeTimestamps);
   }
 
   public splat(
     encoder: GPUCommandEncoder,
-    x: number,
-    y: number,
-    dx: number,
-    dy: number,
+    start: BrushPoint,
+    end: BrushPoint,
     radius: number,
-    intensity: number
+    intensity: number,
+    uniformSlot = 0
   ) {
     const splatPass = encoder.beginComputePass(
       this.computePipelines.splatData.descriptor
     );
-    this.computePipelines.splatData.uniforms.write({
-      pos: vec2f(x, y),
-      delta: vec2f(dx, dy),
+    const uniforms = this.computePipelines.splatData.uniforms[uniformSlot];
+    uniforms.write({
+      start: d.vec2f(start.x, start.y),
+      end: d.vec2f(end.x, end.y),
       radius: radius,
       intensity: intensity,
       grid_size: this.textureSize,
+      dye_size: this.dyeSize,
     });
     const splatBindGroup = this.device.createBindGroup({
       layout: this.computePipelines.splatData.pipeline.getBindGroupLayout(0),
       entries: [
         {
           binding: 0,
-          resource: this.computePipelines.splatData.uniforms,
+          resource: { buffer: this.root.unwrap(uniforms) },
         },
         {
           binding: 1,
-          resource: this.densities.readTexture.createView(),
+          resource: this.densities.readView,
         },
         {
           binding: 2,
-          resource: this.densities.writeTexture.createView(),
+          resource: this.densities.writeView,
         },
         {
           binding: 3,
-          resource: this.velX.readTexture.createView(),
+          resource: this.velX.readView,
         },
         {
           binding: 4,
-          resource: this.velX.writeTexture.createView(),
+          resource: this.velX.writeView,
         },
         {
           binding: 5,
-          resource: this.velY.readTexture.createView(),
+          resource: this.velY.readView,
         },
         {
           binding: 6,
-          resource: this.velY.writeTexture.createView(),
+          resource: this.velY.writeView,
         },
       ],
     });
 
     splatPass.setPipeline(this.computePipelines.splatData.pipeline);
     splatPass.setBindGroup(0, splatBindGroup);
-    splatPass.dispatchWorkgroups(this.textureSize / 8, this.textureSize / 8);
+    const brushWorkgroups = Math.max(this.workgroups, Math.ceil(this.dyeSize / WORKGROUP_SIZE));
+    splatPass.dispatchWorkgroups(brushWorkgroups, brushWorkgroups);
     splatPass.end();
-
-    encoder.copyTextureToTexture(
-      {
-        texture: this.densities.writeTexture,
-      },
-      {
-        texture: this.densities.prevTexture,
-      },
-      {
-        width: this.textureSize,
-        height: this.textureSize,
-      }
-    );
-    encoder.copyTextureToTexture(
-      {
-        texture: this.velX.writeTexture,
-      },
-      {
-        texture: this.velX.prevTexture,
-      },
-      {
-        width: this.textureSize,
-        height: this.textureSize,
-      }
-    );
-    encoder.copyTextureToTexture(
-      {
-        texture: this.velY.writeTexture,
-      },
-      {
-        texture: this.velY.prevTexture,
-      },
-      {
-        width: this.textureSize,
-        height: this.textureSize,
-      }
-    );
 
     this.densities.flip();
     this.velX.flip();
     this.velY.flip();
-    this.densities.swap();
-    this.velX.swap();
-    this.velY.swap();
   }
 
-  private velocityUpdate(encoder: GPUCommandEncoder) {
-    this.velX.swap();
-    this.velY.swap();
-    this.performDiffusion(encoder, this.velX, 0.0001, 0.002);
-    this.performDiffusion(encoder, this.velY, 0.0001, 0.002);
-    this.performProjection(encoder);
-    this.velX.swap();
-    this.velY.swap();
-    this.performAdvection(
-      encoder,
-      this.velX,
-      this.velX.prevTexture,
-      this.velY.prevTexture
-    );
-    this.performAdvection(
-      encoder,
-      this.velY,
-      this.velX.prevTexture,
-      this.velY.prevTexture
-    );
-    this.performProjection(encoder);
+  private velocityUpdate(encoder: GPUCommandEncoder, pressureIterations: PressureIterations) {
+    const { horizontal, vertical } = this.computePipelines.fieldUniforms;
+    this.performDiffusion(encoder, this.velX, horizontal.diffusion);
+    this.performDiffusion(encoder, this.velY, vertical.diffusion);
+    this.performProjection(encoder, pressureIterations);
+
+    const horizontalSource = this.velX.readView;
+    const verticalSource = this.velY.readView;
+    this.performAdvection(encoder, this.velX, horizontalSource, verticalSource, horizontal.advection);
+    this.performAdvection(encoder, this.velY, horizontalSource, verticalSource, vertical.advection);
+    this.performProjection(encoder, pressureIterations);
   }
 
-  private densityUpdate(encoder: GPUCommandEncoder) {
-    this.densities.swap();
-    this.performDiffusion(encoder, this.densities, 0.0001, 0.02);
-    this.densities.swap();
-    this.performAdvection(
-      encoder,
-      this.densities,
-      this.velX.readTexture,
-      this.velY.readTexture
+  private densityUpdate(encoder: GPUCommandEncoder, timestamps?: GPUComputePassTimestampWrites) {
+    const { density } = this.computePipelines.fieldUniforms;
+    this.performDiffusion(encoder, this.densities, density);
+    const { readView, prevView, writeView } = this.densities;
+    this.dyeAdvection.advect(
+      encoder, this.dyeSize, readView, prevView, writeView, this.velX.readView, this.velY.readView, timestamps
     );
     this.densities.flip();
   }
 
   private performDiffusion(
     encoder: GPUCommandEncoder,
-    texture: DensityTextures,
-    diffusionConstant: number,
-    dt: number
+    field: DensityTextures,
+    uniforms: ComputePipelines["fieldUniforms"]["density"]
   ) {
-    this.computePipelines.diffusionData.uniforms.write({
-      diffusion_constant: diffusionConstant,
-      dt: dt,
-      grid_size: this.textureSize,
-      boundaryValue: 2,
-      h: 1.0 / this.textureSize,
-    });
-
-    for (var i = 0; i < 20; i++) {
-      const diffusionPass = encoder.beginComputePass(
-        this.computePipelines.diffusionData.descriptor
+    const { pipeline, descriptor } = this.computePipelines.diffusionData;
+    const source = field.readView;
+    const firstOutput = field.writeView;
+    const secondOutput = field.prevView;
+    const groupFor = (estimate: GPUTextureView, output: GPUTextureView) =>
+      this.computeGroup(pipeline, [estimate, output, source], ([estimate, output, source]) =>
+        this.root.createBindGroup(diffusionLayout, { uniforms, estimate, output, source })
       );
+    const firstGroup = groupFor(source, firstOutput);
+    const groups = [groupFor(secondOutput, firstOutput), groupFor(firstOutput, secondOutput)];
 
-      const diffusionBindGroup = this.device.createBindGroup({
-        layout:
-          this.computePipelines.diffusionData.pipeline.getBindGroupLayout(0),
-        entries: [
-          {
-            binding: 0,
-            resource: this.computePipelines.diffusionData.uniforms,
-          },
-          {
-            binding: 1,
-            resource: texture.readTexture.createView(),
-          },
-          {
-            binding: 2,
-            resource: texture.writeTexture.createView(),
-          },
-          {
-            binding: 3,
-            resource: texture.prevTexture.createView(),
-          },
-        ],
-      });
-
-      diffusionPass.setPipeline(this.computePipelines.diffusionData.pipeline);
-      diffusionPass.setBindGroup(0, diffusionBindGroup);
-      diffusionPass.dispatchWorkgroups(
-        this.textureSize / 8,
-        this.textureSize / 8
-      );
-      diffusionPass.end();
-      texture.flip();
+    const workgroups = Math.ceil((field.readTexture.width - 2) / WORKGROUP_SIZE);
+    const pass = encoder.beginComputePass(descriptor);
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, firstGroup);
+    pass.dispatchWorkgroups(workgroups, workgroups);
+    for (let i = 1; i < this.diffusionIterations; i++) {
+      pass.setBindGroup(0, groups[i % 2]);
+      pass.dispatchWorkgroups(workgroups, workgroups);
     }
+    pass.end();
+    if (this.diffusionIterations % 2 === 0) field.swapWriteAndScratch();
+    field.flip();
   }
 
   private performAdvection(
     encoder: GPUCommandEncoder,
-    texture: DensityTextures,
-    horizontal: GPUTexture,
-    vertical: GPUTexture
+    field: DensityTextures,
+    horizontal: GPUTextureView,
+    vertical: GPUTextureView,
+    uniforms: ComputePipelines["fieldUniforms"]["horizontal"]["advection"]
   ) {
-    const advectPass = encoder.beginComputePass(
-      this.computePipelines.advectData.descriptor
-    );
-    const advectBindGroup = this.device.createBindGroup({
-      layout: this.computePipelines.advectData.pipeline.getBindGroupLayout(0),
-      entries: [
-        {
-          binding: 0,
-          resource: this.computePipelines.advectData.uniforms,
-        },
-        {
-          binding: 1,
-          resource: texture.readTexture.createView(),
-        },
-        {
-          binding: 2,
-          resource: texture.writeTexture.createView(),
-        },
-        {
-          binding: 3,
-          resource: texture.prevTexture.createView(), //unused
-        },
-        {
-          binding: 4,
-          resource: horizontal.createView(),
-        },
-        {
-          binding: 5,
-          resource: vertical.createView(),
-        },
-        {
-          binding: 6,
-          resource: this.sampler,
-        },
-      ],
-    });
-
-    advectPass.setPipeline(this.computePipelines.advectData.pipeline);
-    advectPass.setBindGroup(0, advectBindGroup);
-    advectPass.dispatchWorkgroups(this.textureSize / 8, this.textureSize / 8);
-    advectPass.end();
-    texture.flip();
-  }
-
-  private performProjection(encoder: GPUCommandEncoder) {
-    this.computeDivergence(
-      encoder,
-      this.divergence,
-      this.pressure,
-      this.velX,
-      this.velY
-    );
-    this.computePressure(
-      encoder,
-      this.divergence,
-      this.pressure,
-      this.velX,
-      this.velY
-    );
-    this.projectOnVelocity(
-      encoder,
-      this.divergence,
-      this.pressure,
-      this.velX,
-      this.velY
-    );
-  }
-
-  private computeDivergence(
-    encoder: GPUCommandEncoder,
-    div: DensityTextures,
-    pres: DensityTextures,
-    horiz: DensityTextures,
-    vert: DensityTextures
-  ) {
-    const divergencePass = encoder.beginComputePass(
-      this.computePipelines.projectStageOneData.descriptor
-    );
-    const divergenceBindGroup = this.createProjectionBindGroup(
-      this.computePipelines.projectStageOneData.pipeline,
-      div,
-      pres,
-      horiz,
-      vert
-    );
-    divergencePass.setPipeline(
-      this.computePipelines.projectStageOneData.pipeline
-    );
-    divergencePass.setBindGroup(0, divergenceBindGroup);
-    divergencePass.dispatchWorkgroups(
-      this.textureSize / 8,
-      this.textureSize / 8
-    );
-    divergencePass.end();
-    pres.flip();
-    pres.swap();
-    div.flip();
-  }
-
-  private computePressure(
-    encoder: GPUCommandEncoder,
-    div: DensityTextures,
-    pres: DensityTextures,
-    horiz: DensityTextures,
-    vert: DensityTextures
-  ) {
-    for (var i = 0; i < 200; i++) {
-      const pressurePass = encoder.beginComputePass(
-        this.computePipelines.projectStageTwoData.descriptor
-      );
-      const pressureBindGroup = this.createProjectionBindGroup(
-        this.computePipelines.projectStageTwoData.pipeline,
-        div,
-        pres,
-        horiz,
-        vert
-      );
-      pressurePass.setPipeline(
-        this.computePipelines.projectStageTwoData.pipeline
-      );
-      pressurePass.setBindGroup(0, pressureBindGroup);
-      pressurePass.dispatchWorkgroups(
-        this.textureSize / 8,
-        this.textureSize / 8
-      );
-      pressurePass.end();
-      pres.flip();
-    }
-  }
-
-  private projectOnVelocity(
-    encoder: GPUCommandEncoder,
-    div: DensityTextures,
-    pres: DensityTextures,
-    horiz: DensityTextures,
-    vert: DensityTextures
-  ) {
-    const projectionPass = encoder.beginComputePass(
-      this.computePipelines.projectStageThreeData.descriptor
-    );
-    const projectionBindGroup = this.createProjectionBindGroup(
-      this.computePipelines.projectStageThreeData.pipeline,
-      div,
-      pres,
-      horiz,
-      vert
-    );
-    projectionPass.setPipeline(
-      this.computePipelines.projectStageThreeData.pipeline
-    );
-    projectionPass.setBindGroup(0, projectionBindGroup);
-    projectionPass.dispatchWorkgroups(
-      this.textureSize / 8,
-      this.textureSize / 8
-    );
-    projectionPass.end();
-    horiz.flip();
-    vert.flip();
-  }
-
-  private createProjectionBindGroup(
-    pipeline: GPUComputePipeline,
-    div: DensityTextures,
-    pres: DensityTextures,
-    horiz: DensityTextures,
-    vert: DensityTextures
-  ): GPUBindGroup {
-    const projectionBindGroup = this.device.createBindGroup({
+    const { pipeline, descriptor } = this.computePipelines.advectData;
+    const group = this.device.createBindGroup({
       layout: pipeline.getBindGroupLayout(0),
       entries: [
-        {
-          binding: 0,
-          resource: this.computePipelines.projectStageOneData.uniforms,
-        },
-        {
-          binding: 1,
-          resource: div.readTexture.createView(),
-        },
-        {
-          binding: 2,
-          resource: div.writeTexture.createView(),
-        },
-        {
-          binding: 3,
-          resource: pres.prevTexture.createView(),
-        },
-        {
-          binding: 4,
-          resource: pres.readTexture.createView(),
-        },
-        {
-          binding: 5,
-          resource: pres.writeTexture.createView(),
-        },
-        {
-          binding: 6,
-          resource: horiz.readTexture.createView(),
-        },
-        {
-          binding: 7,
-          resource: horiz.writeTexture.createView(),
-        },
-        {
-          binding: 8,
-          resource: vert.readTexture.createView(),
-        },
-        {
-          binding: 9,
-          resource: vert.writeTexture.createView(),
-        },
+        { binding: 0, resource: { buffer: this.root.unwrap(uniforms) } },
+        { binding: 1, resource: field.readView },
+        { binding: 2, resource: field.writeView },
+        { binding: 3, resource: horizontal },
+        { binding: 4, resource: vertical },
+        { binding: 5, resource: this.sampler },
       ],
     });
+    const pass = encoder.beginComputePass(descriptor);
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, group);
+    pass.dispatchWorkgroups(this.workgroups, this.workgroups);
+    pass.end();
+    field.flip();
+  }
 
-    return projectionBindGroup;
+  private performProjection(encoder: GPUCommandEncoder, pressureIterations: PressureIterations) {
+    const { divergence, pressure, velX, velY } = this;
+    const { divergencePipeline, pressurePipeline, projectionPipeline, projectionUniforms } =
+      this.computePipelines;
+    const divergenceGroup = this.computeGroup(
+      divergencePipeline,
+      [divergence.writeView, pressure.readView, pressure.writeView, velX.readView, velY.readView],
+      ([divergenceOutput, previousPressure, pressureOutput, horizontal, vertical]) =>
+        this.root.createBindGroup(divergenceLayout, {
+          uniforms: projectionUniforms, divergenceOutput, previousPressure,
+          pressureOutput, horizontal, vertical,
+        })
+    );
+    this.dispatchProjection(encoder, divergencePipeline, divergenceGroup, "divergence");
+    pressure.flip();
+    divergence.flip();
+
+    const pressureGroup = (input: GPUTextureView, output: GPUTextureView) =>
+      this.computeGroup(
+        pressurePipeline,
+        [divergence.readView, input, output],
+        ([divergence, pressure, pressureOutput]) =>
+          this.root.createBindGroup(pressureLayout, {
+            uniforms: projectionUniforms, divergence, pressure, pressureOutput,
+          })
+      );
+    const groups = [
+      pressureGroup(pressure.readView, pressure.writeView),
+      pressureGroup(pressure.writeView, pressure.readView),
+    ];
+    const pressurePass = encoder.beginComputePass({ label: "pressure" });
+    pressurePass.setPipeline(pressurePipeline);
+    for (let i = 0; i < pressureIterations; i++) {
+      pressurePass.setBindGroup(0, groups[i % 2]);
+      pressurePass.dispatchWorkgroups(this.workgroups, this.workgroups);
+    }
+    pressurePass.end();
+
+    const projectionGroup = this.computeGroup(
+      projectionPipeline,
+      [pressure.readView, velX.readView, velX.writeView, velY.readView, velY.writeView],
+      ([pressure, horizontal, horizontalOutput, vertical, verticalOutput]) =>
+        this.root.createBindGroup(projectionLayout, {
+          uniforms: projectionUniforms, pressure, horizontal, horizontalOutput,
+          vertical, verticalOutput,
+        })
+    );
+    this.dispatchProjection(encoder, projectionPipeline, projectionGroup, "project velocity");
+    velX.flip();
+    velY.flip();
+  }
+
+  private computeGroup<T extends GPUTextureView[]>(
+    pipeline: GPUComputePipeline,
+    views: T,
+    create: (views: T) => TgpuBindGroup
+  ): GPUBindGroup {
+    let groups = this.computeGroups.get(pipeline);
+    if (!groups) {
+      groups = [];
+      this.computeGroups.set(pipeline, groups);
+    }
+    const cached = groups.find((entry) => views.every((view, i) => view === entry.views[i]));
+    if (cached) return cached.group;
+
+    const group = this.root.unwrap(create(views));
+    groups.push({ views, group });
+    return group;
+  }
+
+  private dispatchProjection(
+    encoder: GPUCommandEncoder,
+    pipeline: GPUComputePipeline,
+    group: GPUBindGroup,
+    label: string
+  ) {
+    const pass = encoder.beginComputePass({ label });
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, group);
+    pass.dispatchWorkgroups(this.workgroups, this.workgroups);
+    pass.end();
+  }
+
+  destroy() {
+    for (const field of [this.densities, this.velX, this.velY, this.divergence, this.pressure]) {
+      field.destroy();
+    }
+    this.computePipelines.destroy();
+  }
+
+  public getDensityView() {
+    return this.densities.readView;
   }
 
   public getDensityTexture() {

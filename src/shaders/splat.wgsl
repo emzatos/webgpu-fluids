@@ -1,43 +1,46 @@
 struct SplatUniforms {
-    position: vec2<f32>,
-    delta: vec2<f32>,
+    start: vec2f,
+    end: vec2f,
     radius: f32,
     intensity: f32,
-};
+    grid_size: u32,
+    dye_size: u32,
+}
 
-@group(0) @binding(0) var<uniform> Uniforms : SplatUniforms;
-@group(0) @binding(1) var density_grid: texture_2d<f32>;
-@group(0) @binding(2) var density_grid_write: texture_storage_2d<r32float, write>;
+@group(0) @binding(0) var<uniform> uniforms: SplatUniforms;
+@group(0) @binding(1) var density: texture_2d<f32>;
+@group(0) @binding(2) var densityOutput: texture_storage_2d<r32float, write>;
+@group(0) @binding(3) var horizontal: texture_2d<f32>;
+@group(0) @binding(4) var horizontalOutput: texture_storage_2d<r32float, write>;
+@group(0) @binding(5) var vertical: texture_2d<f32>;
+@group(0) @binding(6) var verticalOutput: texture_storage_2d<r32float, write>;
 
-@group(0) @binding(3) var horizontal_velocity_grid: texture_2d<f32>;
-@group(0) @binding(4) var horizontal_velocity_grid_write: texture_storage_2d<r32float, write>;
+fn influence(position: vec2f, stroke: vec2f) -> f32 {
+    let progress = clamp(dot(position - uniforms.start, stroke) / max(dot(stroke, stroke), 1e-10), 0.0, 1.0);
+    let distanceToBrush = distance(position, uniforms.start + progress * stroke);
+    if (distanceToBrush >= uniforms.radius) { return 0.0; }
+    return 1.0 - distanceToBrush / uniforms.radius;
+}
 
-@group(0) @binding(5) var vertical_velocity_grid: texture_2d<f32>;
-@group(0) @binding(6) var vertical_velocity_grid_write: texture_storage_2d<r32float, write>;
+@compute @workgroup_size(8, 8)
+fn splat(@builtin(global_invocation_id) id: vec3u) {
+    let cell = id.xy + vec2u(1);
+    let velocitySize = uniforms.grid_size;
+    let dyeSize = uniforms.dye_size;
+    let stroke = uniforms.end - uniforms.start;
 
-@compute @workgroup_size(8, 8) fn splat(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let pos = vec2<f32>(global_id.xy);
-    let mousePos = Uniforms.position;
-    let delta = Uniforms.delta;
-    let radius = Uniforms.radius;
-    let intensity = Uniforms.intensity;
-
-    let dist = distance(pos, mousePos);
-    if (dist < radius) {
-        let influence = (1.0 - dist / radius) * intensity;
-        
-        // Update velocity texture
-        let horizontalVelocity = textureLoad(horizontal_velocity_grid, global_id.xy, 0).x;
-        let verticalVelocity = textureLoad(vertical_velocity_grid, global_id.xy, 0).x;
-        let velocity = vec2f(horizontalVelocity, verticalVelocity);
-        var newVelocity = velocity + delta * influence;
-        newVelocity *= 1.01;
-        textureStore(horizontal_velocity_grid_write, global_id.xy, vec4<f32>(newVelocity.x));
-        textureStore(vertical_velocity_grid_write, global_id.xy, vec4<f32>(newVelocity.y));
-        // Update density texture
-        let density = textureLoad(density_grid, global_id.xy, 0).x;
-        var newDensity = density + influence;
-        newDensity *= 0.99;
-        textureStore(density_grid_write, global_id.xy, vec4<f32>(newDensity, 0.0, 0.0, 1.0));
+    if (all(cell <= vec2u(dyeSize))) {
+        let velocityPosition = (vec2f(cell) - 0.5) * (f32(velocitySize) / f32(dyeSize)) + 0.5;
+        let weight = influence(velocityPosition, stroke);
+        var dye = textureLoad(density, cell, 0).r;
+        if (weight > 0.0) { dye = (dye + weight * uniforms.intensity) * 0.99; }
+        writeField(densityOutput, cell, dyeSize, SCALAR_FIELD, dye);
+    }
+    if (all(cell <= vec2u(velocitySize))) {
+        let weight = influence(vec2f(cell), stroke);
+        var velocity = vec2f(textureLoad(horizontal, cell, 0).r, textureLoad(vertical, cell, 0).r);
+        if (weight > 0.0) { velocity = (velocity + stroke * (0.1 * weight * uniforms.intensity)) * 1.01; }
+        writeField(horizontalOutput, cell, velocitySize, HORIZONTAL_VELOCITY, velocity.x);
+        writeField(verticalOutput, cell, velocitySize, VERTICAL_VELOCITY, velocity.y);
     }
 }

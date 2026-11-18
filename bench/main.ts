@@ -1,0 +1,225 @@
+import { tgpu, type TgpuRoot } from "typegpu";
+import { FluidSimulation, type PressureIterations } from "../src/FluidSimulation";
+import type { DyeTransport } from "../src/DyeAdvection";
+import { Renderer } from "../src/Renderer";
+
+const GRID = 256;
+const WARMUP_STEPS = 8;
+const STROKE_STEPS = 48;
+const SETTLE_STEPS = 16;
+
+const strokes = {
+  line: (t: number) => [0.12 + 0.76 * t, 0.30 + 0.12 * t],
+  spiral: (t: number) => {
+    const angle = 3 * Math.PI * t;
+    const radius = 0.06 + 0.32 * t;
+    return [0.5 + radius * Math.cos(angle), 0.5 + radius * Math.sin(angle)];
+  },
+  wall: (t: number) => [0.05 - 0.048 * t, 0.13 + 0.74 * t],
+};
+
+const canvas = document.querySelector("canvas")!;
+const results = document.querySelector<HTMLPreElement>("#results")!;
+const runButton = document.querySelector<HTMLButtonElement>("#run")!;
+const scene = document.querySelector<HTMLSelectElement>("#scene")!;
+const transport = document.querySelector<HTMLSelectElement>("#transport")!;
+const diffusion = document.querySelector<HTMLSelectElement>("#diffusion")!;
+const resolution = document.querySelector<HTMLSelectElement>("#resolution")!;
+const pressure = document.querySelector<HTMLSelectElement>("#pressure")!;
+
+function percentile(values: number[], fraction: number, showResolution = false) {
+  const value = [...values].sort((a, b) => a - b)[Math.ceil(values.length * fraction) - 1].toFixed(2);
+  return showResolution && value === "0.00" ? "<0.01" : value;
+}
+
+async function readFields(device: GPUDevice, textures: GPUTexture[]) {
+  const encoder = device.createCommandEncoder();
+  const copies = textures.map((texture) => {
+    const bytesPerRow = Math.ceil(texture.width * 4 / 256) * 256;
+    const buffer = device.createBuffer({
+      size: bytesPerRow * texture.height,
+      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    });
+    encoder.copyTextureToBuffer({ texture }, { buffer, bytesPerRow }, [texture.width, texture.height]);
+    return { buffer, stride: bytesPerRow / 4 };
+  });
+  device.queue.submit([encoder.finish()]);
+  return Promise.all(copies.map(async ({ buffer, stride }) => {
+    try {
+      await buffer.mapAsync(GPUMapMode.READ);
+      return { values: new Float32Array(buffer.getMappedRange().slice(0)), stride };
+    } finally {
+      buffer.destroy();
+    }
+  }));
+}
+
+function createDyeTimer(device: GPUDevice) {
+  if (!device.features.has("timestamp-query")) return;
+  const querySet = device.createQuerySet({ type: "timestamp", count: 2 });
+  const resolved = device.createBuffer({
+    size: 16, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
+  });
+  const readback = device.createBuffer({
+    size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  });
+  const timestampWrites = {
+    querySet, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1,
+  };
+  return {
+    timestampWrites,
+    resolve(encoder: GPUCommandEncoder) {
+      encoder.resolveQuerySet(querySet, 0, 2, resolved, 0);
+      encoder.copyBufferToBuffer(resolved, 0, readback, 0, 16);
+    },
+    async milliseconds() {
+      await readback.mapAsync(GPUMapMode.READ);
+      try {
+        const [start, end] = new BigUint64Array(readback.getMappedRange());
+        return Number(end - start) / 1e6;
+      } finally {
+        readback.unmap();
+      }
+    },
+  };
+}
+
+async function verifyBrush(root: TgpuRoot) {
+  const simulation = new FluidSimulation(root, 16, { startEmpty: true });
+  try {
+    const encoder = root.device.createCommandEncoder();
+    simulation.splat(encoder, { x: 3, y: 4 }, { x: 13, y: 4 }, 2, 1, 0);
+    simulation.splat(encoder, { x: 3, y: 12 }, { x: 13, y: 12 }, 2, 1, 1);
+    root.device.queue.submit([encoder.finish()]);
+    const [{ values, stride }] = await readFields(root.device, [simulation.getDensityTexture()]);
+    if (!(values[4 * stride + 8] >= 0.9) || !(values[12 * stride + 8] >= 0.9)
+        || values[8 * stride + 8] !== 0) {
+      throw Error("Brush test failed. Expected two separate, continuous strokes in one submission.");
+    }
+  } finally {
+    simulation.destroy();
+  }
+}
+
+runButton.addEventListener("click", async () => {
+  runButton.disabled = true;
+  scene.disabled = true;
+  transport.disabled = true;
+  diffusion.disabled = true;
+  resolution.disabled = true;
+  pressure.disabled = true;
+  results.textContent = "Running stroke replay…";
+  let device: GPUDevice | undefined;
+
+  try {
+    const root = await tgpu.init({
+      device: { requiredFeatures: ["float32-filterable"], optionalFeatures: ["timestamp-query"] },
+    });
+    device = root.device;
+    device.pushErrorScope("validation");
+    const dyeSize = Number(resolution.value);
+    const pressureIterations = Number(pressure.value) as PressureIterations;
+    const simulation = new FluidSimulation(root, GRID, {
+      startEmpty: true,
+      dyeTransport: transport.value as DyeTransport,
+      diffusionIterations: Number(diffusion.value),
+      dyeSize,
+    });
+    const renderer = new Renderer(root, root.configureContext({ canvas }));
+    const stroke = strokes[scene.value as keyof typeof strokes];
+    const position = (t: number) => stroke(t).map((coordinate) => 1 + coordinate * (GRID - 1));
+    const encoding: number[] = [];
+    const completion: number[] = [];
+    const dyeTimes: number[] = [];
+    const timer = createDyeTimer(device);
+
+    for (let step = -WARMUP_STEPS; step < STROKE_STEPS + SETTLE_STEPS; step++) {
+      await new Promise(requestAnimationFrame);
+      const start = performance.now();
+      const frame = root.createCommandEncoder();
+      const encoder = root.unwrap(frame);
+      if (step >= 0 && step < STROKE_STEPS) {
+        const [x, y] = position(step / (STROKE_STEPS - 1));
+        const [previousX, previousY] = position(Math.max(0, step - 1) / (STROKE_STEPS - 1));
+        simulation.splat(encoder, { x: previousX, y: previousY }, { x, y }, 3, 1);
+      }
+      simulation.update(encoder, pressureIterations, step >= 0 ? timer?.timestampWrites : undefined);
+      renderer.render(frame, simulation.getDensityView(), 1);
+      if (step >= 0) timer?.resolve(encoder);
+      frame.submit();
+      const submitted = performance.now();
+      await device.queue.onSubmittedWorkDone();
+      if (step >= 0) {
+        encoding.push(submitted - start);
+        completion.push(performance.now() - submitted);
+        if (timer) dyeTimes.push(await timer.milliseconds());
+      }
+    }
+
+    const [dye, horizontal, vertical] = await readFields(device, [
+      simulation.getDensityTexture(),
+      simulation.getVelXTexture(),
+      simulation.getVelYTexture(),
+    ]);
+    await verifyBrush(root);
+    const error = await device.popErrorScope();
+    if (error) throw error;
+
+    let mass = 0;
+    let peak = 0;
+    let min = 0;
+    let gradient = 0;
+    for (let y = 1; y <= dyeSize; y++) {
+      for (let x = 1; x <= dyeSize; x++) {
+        const value = dye.values[y * dye.stride + x];
+        mass += value;
+        peak = Math.max(peak, value);
+        min = Math.min(min, value);
+        if (x < dyeSize) gradient += Math.abs(dye.values[y * dye.stride + x + 1] - value);
+        if (y < dyeSize) gradient += Math.abs(dye.values[(y + 1) * dye.stride + x] - value);
+      }
+    }
+    let divergenceSquares = 0;
+    for (let y = 1; y <= GRID; y++) {
+      for (let x = 1; x <= GRID; x++) {
+        const u = y * horizontal.stride + x;
+        const v = y * vertical.stride + x;
+        const divergence = (horizontal.values[u + 1] - horizontal.values[u - 1]
+          + vertical.values[v + vertical.stride] - vertical.values[v - vertical.stride]) * GRID / 2;
+        divergenceSquares += divergence ** 2;
+      }
+    }
+
+    if (![dye, horizontal, vertical].every(({ values }) => values.every(Number.isFinite))
+        || min < -1e-5 || mass <= 0 || gradient <= 0) {
+      throw Error("Invalid output. Expected finite velocity and non-negative, nonuniform dye.");
+    }
+
+    results.textContent = [
+      "PASS · WebGPU, field, and brush checks",
+      `${encoding.length} measured frames · ${GRID}² velocity · ${dyeSize}² dye · one frame in flight`,
+      `CPU encode + submit: ${percentile(encoding, 0.5)} ms median · ${percentile(encoding, 0.95)} ms p95`,
+      `Submit to completion: ${percentile(completion, 0.5)} ms median · ${percentile(completion, 0.95)} ms p95`,
+      `Dye mass: ${mass.toFixed(3)} · peak: ${peak.toFixed(4)}`,
+      `Dye edge variation / mass: ${(gradient / mass).toFixed(5)}`,
+      `RMS velocity divergence: ${Math.sqrt(divergenceSquares / GRID ** 2).toFixed(4)}`,
+      dyeTimes.length
+        ? `GPU dye advection: ${percentile(dyeTimes, 0.5, true)} ms median · ${percentile(dyeTimes, 0.95, true)} ms p95`
+        : "GPU dye advection timing is unavailable on this browser or device.",
+    ].join("\n");
+  } catch (error) {
+    results.textContent = `FAIL · ${error instanceof Error ? error.message : String(error)}`;
+  } finally {
+    runButton.disabled = false;
+    scene.disabled = false;
+    transport.disabled = false;
+    diffusion.disabled = false;
+    resolution.disabled = false;
+    pressure.disabled = false;
+    // Allow the last submitted image to be presented before releasing test resources.
+    if (device) {
+      const finishedDevice = device;
+      requestAnimationFrame(() => finishedDevice.destroy());
+    }
+  }
+});

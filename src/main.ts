@@ -1,5 +1,8 @@
 import "./style.css";
-import { MouseHandler } from "./MouseHandler";
+import { tgpu } from "typegpu";
+import { attachAutoResizer } from "typegpu/common";
+import { BrushInput, type BrushPoint } from "./BrushInput";
+import { SimulationClock } from "./SimulationClock";
 import { FluidSimulation } from "./FluidSimulation";
 import { Renderer } from "./Renderer";
 import { settings } from "./settings";
@@ -10,6 +13,13 @@ import { FluidControls } from "./FluidControls";
 const controlsRoot = document.getElementById("fluid-controls");
 if (controlsRoot) {
   createRoot(controlsRoot).render(createElement(FluidControls));
+}
+
+function interpolate(start: BrushPoint, end: BrushPoint, fraction: number): BrushPoint {
+  return {
+    x: start.x + (end.x - start.x) * fraction,
+    y: start.y + (end.y - start.y) * fraction,
+  };
 }
 
 async function main() {
@@ -23,76 +33,57 @@ async function main() {
     return;
   }
 
+  const root = tgpu.initFromDevice({ device });
   const canvas = document.querySelector("canvas") as HTMLCanvasElement;
-  const context = canvas.getContext("webgpu") as GPUCanvasContext;
+  const context = root.configureContext({ canvas });
   const textureSize = 256;
-  const canvasToSizeMap = new WeakMap();
-  const observer: ResizeObserver = new ResizeObserver((entries) => {
-    for (const entry of entries) {
-      canvasToSizeMap.set(entry.target as HTMLCanvasElement, {
-        width: entry.contentBoxSize[0].inlineSize,
-        height: entry.contentBoxSize[0].blockSize,
-      });
-    }
-  });
+  attachAutoResizer({ root, canvas });
 
-  observer.observe(canvas);
+  let dyeSize = settings.dyeSize;
+  let simulation = new FluidSimulation(root, textureSize, { dyeSize });
+  const brushInput = new BrushInput(canvas, textureSize);
+  const renderer = new Renderer(root, context);
 
-  const simulation = new FluidSimulation(device, textureSize);
-  const mouseHandler = new MouseHandler(canvas, textureSize);
-  const renderer = new Renderer(device, canvas, context);
+  const clock = new SimulationClock();
 
-  function resizeCanvasToDisplaySize(): boolean {
-    const dimensions = canvasToSizeMap.get(canvas) || canvas;
-    const width = Math.max(
-      1,
-      Math.min(dimensions.width, device!.limits.maxTextureDimension2D)
-    );
-    const height = Math.max(
-      1,
-      Math.min(dimensions.height, device!.limits.maxTextureDimension2D)
-    );
-
-    const needResize = canvas.width !== width || canvas.height !== height;
-    if (needResize) {
-      canvas.width = width;
-      canvas.height = height;
+  function render(timestamp: number) {
+    if (settings.dyeSize !== dyeSize) {
+      dyeSize = settings.dyeSize;
+      simulation.destroy();
+      simulation = new FluidSimulation(root, textureSize, { dyeSize });
     }
 
-    return needResize;
-  }
+    if (settings.resetRequested) {
+      settings.resetRequested = false;
+      simulation.destroy();
+      simulation = new FluidSimulation(root, textureSize, { dyeSize });
+    }
 
-  function render() {
-    resizeCanvasToDisplaySize();
-    const encoder = device!.createCommandEncoder({
-      label: "command encoder",
+    const frame = root.createCommandEncoder({
+      label: "fluid frame",
     });
+    const encoder = root.unwrap(frame);
 
-    if (mouseHandler.mouseDown) {
-      simulation.splat(
-        encoder,
-        mouseHandler.mousePosition.x,
-        mouseHandler.mousePosition.y,
-        (mouseHandler.mousePosition.x - mouseHandler.lastMousePosition.x) * 0.1,
-        (mouseHandler.mousePosition.y - mouseHandler.lastMousePosition.y) * 0.1,
-        settings.brushRadius,
-        1
-      );
+    const steps = clock.advance(timestamp);
+    const stroke = steps > 0 ? brushInput.takeStroke() : undefined;
+    for (let step = 0; step < steps; step++) {
+      if (stroke) {
+        simulation.splat(
+          encoder,
+          interpolate(stroke.start, stroke.end, step / steps),
+          interpolate(stroke.start, stroke.end, (step + 1) / steps),
+          settings.brushRadius, 1, step
+        );
+      }
+      simulation.update(encoder, settings.pressureIterations);
     }
+    renderer.render(frame, simulation.getDensityView(), settings.palette);
 
-    simulation.update(encoder);
-    renderer.render(encoder, simulation.getDensityTexture().createView(), settings.palette);
+    frame.submit();
 
-    const commandBuffer = encoder.finish();
-    device!.queue.submit([commandBuffer]);
-
-    mouseHandler.lastMousePosition = {
-      x: mouseHandler.mousePosition.x,
-      y: mouseHandler.mousePosition.y,
-    };
     requestAnimationFrame(render);
   }
-  render();
+  requestAnimationFrame(render);
 }
 
 main();

@@ -1,6 +1,5 @@
 struct ProjectionUniforms {
     grid_size: u32,
-    boundaryValue: u32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms : ProjectionUniforms;
@@ -20,90 +19,64 @@ struct ProjectionUniforms {
 
 
 @compute @workgroup_size(8, 8) fn update_divergence (
-    @builtin(global_invocation_id) glob : vec3<u32>,
+    @builtin(global_invocation_id) id : vec3<u32>,
 ) {
-  _ = divergence_grid;
-  _ = pressure_grid;
-  _ = horizontal_velocity_grid_write;
-  _ = vertical_velocity_grid_write;
 
-  // update divergence, neutralize pressure
-  let x = glob.x;
-  let y = glob.y;
-  if (x == 0 || y == 0) {
-      return;
-  }
-  if (x > uniforms.grid_size || y > uniforms.grid_size) {
+  // Compute divergence and warm-start the pressure solve.
+  let cell = id.xy + vec2u(1);
+  let size = uniforms.grid_size;
+  if (any(cell > vec2u(size))) {
       return;
   }
 
-  let horizontal_diff = textureLoad(horizontal_velocity_grid, vec2u(glob.x+1, glob.y), 0) - textureLoad(horizontal_velocity_grid, vec2u(glob.x-1, glob.y), 0);
-  let vertical_diff = textureLoad(vertical_velocity_grid, vec2u(glob.x, glob.y+1), 0) - textureLoad(vertical_velocity_grid, vec2u(glob.x, glob.y-1), 0);
-  let h = 1.0 / f32(uniforms.grid_size);
+  let horizontal_diff = textureLoad(horizontal_velocity_grid, cell + X_STEP, 0) - textureLoad(horizontal_velocity_grid, cell - X_STEP, 0);
+  let vertical_diff = textureLoad(vertical_velocity_grid, cell + Y_STEP, 0) - textureLoad(vertical_velocity_grid, cell - Y_STEP, 0);
+  let h = 1.0 / f32(size);
 
   let value = -0.5 * h * (horizontal_diff + vertical_diff);
-  textureStore(divergence_grid_write, glob.xy, value);
-  textureStore(pressure_grid_write, glob.xy, textureLoad(prev_pressure_grid, glob.xy, 0) * 0.99);
+  textureStore(divergence_grid_write, cell, value);
+  textureStore(pressure_grid_write, cell, textureLoad(prev_pressure_grid, cell, 0) * 0.99);
 
-  //set bnd
 }
 
 @compute @workgroup_size(8, 8) fn update_pressure (
-    @builtin(global_invocation_id) glob : vec3<u32>,
+    @builtin(global_invocation_id) id : vec3<u32>,
 ) {
-  _ = divergence_grid_write;
-  _ = vertical_velocity_grid;
-  _ = vertical_velocity_grid_write;
-  _ = horizontal_velocity_grid;
-  _ = horizontal_velocity_grid_write;
-  _ = prev_pressure_grid;
   // update pressure from divergence
-  let x = glob.x;
-  let y = glob.y;
-  if (x == 0 || y == 0) {
-      return;
-  }
-  if (x > uniforms.grid_size || y > uniforms.grid_size) {
+  let cell = id.xy + vec2u(1);
+  let size = uniforms.grid_size;
+  if (any(cell > vec2u(size))) {
       return;
   }
 
-  let div = textureLoad(divergence_grid, glob.xy, 0);
-  let adjacent_pressure = textureLoad(pressure_grid, vec2u(glob.x-1, glob.y), 0) 
-  + textureLoad(pressure_grid, vec2u(glob.x+1, glob.y), 0)
-  + textureLoad(pressure_grid, vec2u(glob.x, glob.y-1), 0)
-  + textureLoad(pressure_grid, vec2u(glob.x, glob.y+1), 0);
+  let div = textureLoad(divergence_grid, cell, 0);
+  let adjacent_pressure = textureLoad(pressure_grid, cell - X_STEP, 0)
+  + textureLoad(pressure_grid, cell + X_STEP, 0)
+  + textureLoad(pressure_grid, cell - Y_STEP, 0)
+  + textureLoad(pressure_grid, cell + Y_STEP, 0);
 
-  textureStore(pressure_grid_write, glob.xy, (div + adjacent_pressure) / 4.0);
+  textureStore(pressure_grid_write, cell, (div + adjacent_pressure) / 4.0);
 
 }
 
 @compute @workgroup_size(8, 8) fn apply_to_velocities (
-    @builtin(global_invocation_id) glob : vec3<u32>,
+    @builtin(global_invocation_id) id : vec3<u32>,
 ) {
-  _ = divergence_grid_write;
-  _ = divergence_grid;
-  _ = pressure_grid_write;
-  _ = prev_pressure_grid;
-  let x = glob.x;
-  let y = glob.y;
-  if (x == 0 || y == 0) {
+  let cell = id.xy + vec2u(1);
+  let size = uniforms.grid_size;
+  if (any(cell > vec2u(size))) {
       return;
   }
-  if (x > uniforms.grid_size || y > uniforms.grid_size) {
-      return;
-  }
-  
-  var horizontal_pressure = textureLoad(pressure_grid, vec2u(glob.x + 1, glob.y), 0) - textureLoad(pressure_grid, vec2u(glob.x - 1, glob.y), 0);
-  var vertical_pressure = textureLoad(pressure_grid, vec2u(glob.x, glob.y+1), 0) - textureLoad(pressure_grid, vec2u(glob.x, glob.y-1), 0);
-  let h = 1.0 / f32(uniforms.grid_size);
+
+  var horizontal_pressure = textureLoad(pressure_grid, cell + X_STEP, 0).r - textureLoad(pressure_grid, cell - X_STEP, 0).r;
+  var vertical_pressure = textureLoad(pressure_grid, cell + Y_STEP, 0).r - textureLoad(pressure_grid, cell - Y_STEP, 0).r;
+  let h = 1.0 / f32(size);
   horizontal_pressure = (horizontal_pressure * 0.5) / h;
   vertical_pressure = (vertical_pressure * 0.5) / h;
 
-  let new_horizontal_velocity = textureLoad(horizontal_velocity_grid, glob.xy, 0) - horizontal_pressure;
-  let new_vertical_velocity = textureLoad(vertical_velocity_grid, glob.xy, 0) - vertical_pressure;
+  let new_horizontal_velocity = textureLoad(horizontal_velocity_grid, cell, 0).r - horizontal_pressure;
+  let new_vertical_velocity = textureLoad(vertical_velocity_grid, cell, 0).r - vertical_pressure;
 
-  textureStore(horizontal_velocity_grid_write, glob.xy, new_horizontal_velocity);
-  textureStore(vertical_velocity_grid_write, glob.xy, new_vertical_velocity);
+  writeField(horizontal_velocity_grid_write, cell, size, HORIZONTAL_VELOCITY, new_horizontal_velocity);
+  writeField(vertical_velocity_grid_write, cell, size, VERTICAL_VELOCITY, new_vertical_velocity);
 }
-
-
