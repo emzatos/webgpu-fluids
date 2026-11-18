@@ -66,9 +66,10 @@ async function main() {
 
   function render() {
     resizeCanvasToDisplaySize();
-    const encoder = device!.createCommandEncoder({
-      label: "command encoder",
+    const frame = root.createCommandEncoder({
+      label: "fluid frame",
     });
+    const encoder = root.unwrap(frame);
 
     if (mouseHandler.mouseDown) {
       simulation.splat(
@@ -85,8 +86,7 @@ async function main() {
     simulation.update(encoder);
     renderer.render(encoder, simulation.getDensityTexture().createView(), settings.palette);
 
-    const commandBuffer = encoder.finish();
-    device!.queue.submit([commandBuffer]);
+    frame.submit();
 
     mouseHandler.lastMousePosition = {
       x: mouseHandler.mousePosition.x,

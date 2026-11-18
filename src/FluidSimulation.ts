@@ -4,6 +4,8 @@ import {
 } from "./ComputePipelines";
 import { d, type TgpuBindGroup, type TgpuRoot } from "typegpu";
 
+const PRESSURE_ITERATIONS = 200;
+
 export class FluidSimulation {
   private device: GPUDevice;
   private textureSize: number;
@@ -351,12 +353,18 @@ export class FluidSimulation {
             uniforms: projectionUniforms, divergence, pressure, pressureOutput,
           })
       );
-    const forward = pressureGroup(pressure.readView, pressure.writeView);
-    const backward = pressureGroup(pressure.writeView, pressure.readView);
-    for (let i = 0; i < 200; i += 2) {
-      this.dispatchProjection(encoder, pressurePipeline, forward, "pressure");
-      this.dispatchProjection(encoder, pressurePipeline, backward, "pressure");
+    const groups = [
+      pressureGroup(pressure.readView, pressure.writeView),
+      pressureGroup(pressure.writeView, pressure.readView),
+    ];
+    const pressurePass = encoder.beginComputePass({ label: "pressure" });
+    pressurePass.setPipeline(pressurePipeline);
+    for (let i = 0; i < PRESSURE_ITERATIONS; i++) {
+      pressurePass.setBindGroup(0, groups[i % 2]);
+      pressurePass.dispatchWorkgroups(this.textureSize / 8, this.textureSize / 8);
     }
+    pressurePass.end();
+    if (PRESSURE_ITERATIONS % 2 !== 0) pressure.flip();
 
     const projectionGroup = this.projectionGroup(
       projectionPipeline,
