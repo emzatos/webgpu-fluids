@@ -6,7 +6,7 @@ export function FluidControls() {
     useControls({
         "Color scheme": {
             value: settings.palette,
-            options: { Rainbow: 0, "White on black": 1, "Black on white": 2},
+            options: { Rainbow: 0, Ember: 3, "White on black": 1, "Black on white": 2 },
             onChange: (value: number) => { settings.palette = value; },
         },
         "Brush size": {

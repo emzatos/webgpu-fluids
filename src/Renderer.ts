@@ -26,6 +26,17 @@ const rainbow = (density: number): d.v3f => {
   return d.vec3f(1, 0, blend);
 };
 
+const ember = (density: number): d.v3f => {
+  "use gpu";
+  const dye = std.max(density, 0);
+  const intensity = std.sqrt(dye / (dye + 0.22));
+  const background = d.vec3f(0.025, 0.035, 0.065);
+  const orange = d.vec3f(0.93, 0.21, 0.07);
+  const highlight = d.vec3f(1, 0.93, 0.69);
+  if (intensity < 0.65) return std.mix(background, orange, intensity / 0.65);
+  return std.mix(orange, highlight, (intensity - 0.65) / 0.35);
+};
+
 export class Renderer {
   private readonly pipeline;
   private readonly palette;
@@ -44,6 +55,7 @@ export class Renderer {
         case 0: return d.vec4f(rainbow(density), 1);
         case 1: return d.vec4f(d.vec3f(density), 1);
         case 2: return d.vec4f(d.vec3f(1 - density), 1);
+        case 3: return d.vec4f(ember(density), 1);
         default: return d.vec4f(0, 0, 0, 1);
       }
     });
