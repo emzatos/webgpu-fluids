@@ -25,7 +25,6 @@ async function main() {
         height: entry.contentBoxSize[0].blockSize,
       });
     }
-    render();
   });
 
   observer.observe(canvas);
