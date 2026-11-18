@@ -1,5 +1,6 @@
 import { tgpu } from "typegpu";
-import { FluidSimulation, type DyeTransport } from "../src/FluidSimulation";
+import { FluidSimulation } from "../src/FluidSimulation";
+import type { DyeTransport } from "../src/DyeAdvection";
 import { Renderer } from "../src/Renderer";
 
 const GRID = 256;
@@ -23,6 +24,7 @@ const runButton = document.querySelector<HTMLButtonElement>("#run")!;
 const scene = document.querySelector<HTMLSelectElement>("#scene")!;
 const transport = document.querySelector<HTMLSelectElement>("#transport")!;
 const diffusion = document.querySelector<HTMLSelectElement>("#diffusion")!;
+const resolution = document.querySelector<HTMLSelectElement>("#resolution")!;
 
 function percentile(values: number[], fraction: number) {
   return [...values].sort((a, b) => a - b)[Math.ceil(values.length * fraction) - 1].toFixed(2);
@@ -55,6 +57,7 @@ runButton.addEventListener("click", async () => {
   scene.disabled = true;
   transport.disabled = true;
   diffusion.disabled = true;
+  resolution.disabled = true;
   results.textContent = "Running stroke replay…";
   let device: GPUDevice | undefined;
 
@@ -62,10 +65,12 @@ runButton.addEventListener("click", async () => {
     const root = await tgpu.init({ device: { requiredFeatures: ["float32-filterable"] } });
     device = root.device;
     device.pushErrorScope("validation");
+    const dyeSize = Number(resolution.value);
     const simulation = new FluidSimulation(root, GRID, {
       startEmpty: true,
       dyeTransport: transport.value as DyeTransport,
       diffusionIterations: Number(diffusion.value),
+      dyeSize,
     });
     const renderer = new Renderer(root, root.configureContext({ canvas }));
     const stroke = strokes[scene.value as keyof typeof strokes];
@@ -106,15 +111,19 @@ runButton.addEventListener("click", async () => {
     let peak = 0;
     let min = 0;
     let gradient = 0;
-    let divergenceSquares = 0;
-    for (let y = 1; y <= GRID; y++) {
-      for (let x = 1; x <= GRID; x++) {
+    for (let y = 1; y <= dyeSize; y++) {
+      for (let x = 1; x <= dyeSize; x++) {
         const value = dye.values[y * dye.stride + x];
         mass += value;
         peak = Math.max(peak, value);
         min = Math.min(min, value);
-        if (x < GRID) gradient += Math.abs(dye.values[y * dye.stride + x + 1] - value);
-        if (y < GRID) gradient += Math.abs(dye.values[(y + 1) * dye.stride + x] - value);
+        if (x < dyeSize) gradient += Math.abs(dye.values[y * dye.stride + x + 1] - value);
+        if (y < dyeSize) gradient += Math.abs(dye.values[(y + 1) * dye.stride + x] - value);
+      }
+    }
+    let divergenceSquares = 0;
+    for (let y = 1; y <= GRID; y++) {
+      for (let x = 1; x <= GRID; x++) {
         const u = y * horizontal.stride + x;
         const v = y * vertical.stride + x;
         const divergence = (horizontal.values[u + 1] - horizontal.values[u - 1]
@@ -130,7 +139,7 @@ runButton.addEventListener("click", async () => {
 
     results.textContent = [
       "PASS · WebGPU validation and field checks",
-      `${encoding.length} measured frames · ${GRID} × ${GRID} grid · one frame in flight`,
+      `${encoding.length} measured frames · ${GRID}² velocity · ${dyeSize}² dye · one frame in flight`,
       `CPU encode + submit: ${percentile(encoding, 0.5)} ms median · ${percentile(encoding, 0.95)} ms p95`,
       `Submit to completion: ${percentile(completion, 0.5)} ms median · ${percentile(completion, 0.95)} ms p95`,
       `Dye mass: ${mass.toFixed(3)} · peak: ${peak.toFixed(4)}`,
@@ -144,6 +153,7 @@ runButton.addEventListener("click", async () => {
     scene.disabled = false;
     transport.disabled = false;
     diffusion.disabled = false;
+    resolution.disabled = false;
     // Allow the last submitted image to be presented before releasing test resources.
     if (device) {
       const finishedDevice = device;

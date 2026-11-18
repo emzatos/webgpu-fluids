@@ -31,11 +31,18 @@ async function main() {
   const textureSize = 256;
   attachAutoResizer({ root, canvas });
 
-  const simulation = new FluidSimulation(root, textureSize);
+  let dyeSize = settings.dyeSize;
+  let simulation = new FluidSimulation(root, textureSize, { dyeSize });
   const mouseHandler = new MouseHandler(canvas, textureSize);
   const renderer = new Renderer(root, context);
 
   function render() {
+    if (settings.dyeSize !== dyeSize) {
+      dyeSize = settings.dyeSize;
+      simulation.destroy();
+      simulation = new FluidSimulation(root, textureSize, { dyeSize });
+    }
+
     const frame = root.createCommandEncoder({
       label: "fluid frame",
     });

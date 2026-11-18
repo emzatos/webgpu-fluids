@@ -4,6 +4,7 @@ struct SplatUniforms {
     radius: f32,
     intensity: f32,
     grid_size: u32,
+    dye_size: u32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: SplatUniforms;
@@ -14,24 +15,30 @@ struct SplatUniforms {
 @group(0) @binding(5) var vertical: texture_2d<f32>;
 @group(0) @binding(6) var verticalOutput: texture_storage_2d<r32float, write>;
 
+fn influence(position: vec2f) -> f32 {
+    let distanceToBrush = distance(position, uniforms.position);
+    if (distanceToBrush >= uniforms.radius) { return 0.0; }
+    return 1.0 - distanceToBrush / uniforms.radius;
+}
+
 @compute @workgroup_size(8, 8)
 fn splat(@builtin(global_invocation_id) id: vec3u) {
     let cell = id.xy + vec2u(1);
-    let size = uniforms.grid_size;
-    if (any(cell > vec2u(size))) {
-        return;
-    }
+    let velocitySize = uniforms.grid_size;
+    let dyeSize = uniforms.dye_size;
 
-    var dye = textureLoad(density, cell, 0).r;
-    var velocity = vec2f(textureLoad(horizontal, cell, 0).r, textureLoad(vertical, cell, 0).r);
-    let dist = distance(vec2f(cell), uniforms.position);
-    if (dist < uniforms.radius) {
-        let influence = (1.0 - dist / uniforms.radius) * uniforms.intensity;
-        dye = (dye + influence) * 0.99;
-        velocity = (velocity + uniforms.delta * influence) * 1.01;
+    if (all(cell <= vec2u(dyeSize))) {
+        let velocityPosition = (vec2f(cell) - 0.5) * (f32(velocitySize) / f32(dyeSize)) + 0.5;
+        let weight = influence(velocityPosition);
+        var dye = textureLoad(density, cell, 0).r;
+        if (weight > 0.0) { dye = (dye + weight * uniforms.intensity) * 0.99; }
+        writeField(densityOutput, cell, dyeSize, SCALAR_FIELD, dye);
     }
-
-    writeField(densityOutput, cell, size, SCALAR_FIELD, dye);
-    writeField(horizontalOutput, cell, size, HORIZONTAL_VELOCITY, velocity.x);
-    writeField(verticalOutput, cell, size, VERTICAL_VELOCITY, velocity.y);
+    if (all(cell <= vec2u(velocitySize))) {
+        let weight = influence(vec2f(cell));
+        var velocity = vec2f(textureLoad(horizontal, cell, 0).r, textureLoad(vertical, cell, 0).r);
+        if (weight > 0.0) { velocity = (velocity + uniforms.delta * (weight * uniforms.intensity)) * 1.01; }
+        writeField(horizontalOutput, cell, velocitySize, HORIZONTAL_VELOCITY, velocity.x);
+        writeField(verticalOutput, cell, velocitySize, VERTICAL_VELOCITY, velocity.y);
+    }
 }

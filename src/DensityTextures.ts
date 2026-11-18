@@ -8,10 +8,12 @@ export class DensityTextures {
     device,
     textureSize,
     data,
+    initialRadius = 20,
   }: {
     device: GPUDevice;
     textureSize: number;
     data?: Float32Array;
+    initialRadius?: number;
   }) {
     const descriptor: GPUTextureDescriptor = {
       label: "storage texture",
@@ -24,7 +26,7 @@ export class DensityTextures {
         GPUTextureUsage.COPY_DST,
     };
 
-    const textureData = data ?? this.initializeData(textureSize);
+    const textureData = data ?? this.initializeData(textureSize, initialRadius);
 
     const textures = Array.from({ length: 3 }).map(() => {
       const texture = device.createTexture(descriptor);
@@ -59,7 +61,11 @@ export class DensityTextures {
     return this.views.get(this.prevTexture)!;
   }
 
-  initializeData(textureSize: number) {
+  destroy() {
+    for (const texture of this.views.keys()) texture.destroy();
+  }
+
+  private initializeData(textureSize: number, radius: number) {
     const N = textureSize - 2;
     const textureData = new Float32Array((N + 2) * (N + 2));
     for (let x = 1; x <= N; ++x) {
@@ -67,7 +73,7 @@ export class DensityTextures {
         const dx = x - (N + 2) / 2;
         const dy = y - (N + 2) / 2;
         const dist = Math.hypot(dx, dy);
-        if (dist < 20) {
+        if (dist < radius) {
           textureData[y * (N + 2) + x] = 1;
         }
       }

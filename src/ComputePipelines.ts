@@ -17,7 +17,7 @@ export class ComputePipelines {
   readonly projectionUniforms;
   readonly splatData;
 
-  constructor(root: TgpuRoot, textureSize: number) {
+  constructor(root: TgpuRoot, textureSize: number, dyeSize: number) {
     const { device } = root;
     const createModule = (label: string, code: string) =>
       device.createShaderModule({ label, code: boundaryShader + "\n" + code });
@@ -42,18 +42,20 @@ export class ComputePipelines {
       pipeline: createPipeline(createModule("diffusion", diffuseShader), "diffuse", diffusionLayout),
       descriptor: { label: "diffuse pass" },
     };
-    const fieldUniforms = (boundaryValue: number, diffusionDt: number) => ({
-      diffusion: root.createBuffer(DiffusionUniforms, {
-        diffusion_constant: 0.0001, dt: diffusionDt, grid_size: textureSize, boundaryValue,
-      }).$usage("uniform"),
+    const diffusionUniforms = (gridSize: number, boundaryValue: number, dt: number) =>
+      root.createBuffer(DiffusionUniforms, {
+        diffusion_constant: 0.0001, dt, grid_size: gridSize, boundaryValue,
+      }).$usage("uniform");
+    const velocityUniforms = (boundaryValue: number) => ({
+      diffusion: diffusionUniforms(textureSize, boundaryValue, 0.002),
       advection: root.createBuffer(AdvectUniforms, {
         dt: ADVECTION_DT, grid_size: textureSize, boundaryValue,
       }).$usage("uniform"),
     });
     this.fieldUniforms = {
-      density: fieldUniforms(0, 0.02),
-      horizontal: fieldUniforms(1, 0.002),
-      vertical: fieldUniforms(2, 0.002),
+      density: diffusionUniforms(dyeSize, 0, 0.02),
+      horizontal: velocityUniforms(1),
+      vertical: velocityUniforms(2),
     };
     this.advectData = {
       pipeline: createPipeline(createModule("advection", advectShader), "advect"),
@@ -67,6 +69,16 @@ export class ComputePipelines {
       descriptor: { label: "splat pass" },
       uniforms: root.createBuffer(SplatUniforms).$usage("uniform"),
     };
+  }
+  destroy() {
+    const { density, horizontal, vertical } = this.fieldUniforms;
+    density.destroy();
+    for (const { diffusion, advection } of [horizontal, vertical]) {
+      diffusion.destroy();
+      advection.destroy();
+    }
+    this.projectionUniforms.destroy();
+    this.splatData.uniforms.destroy();
   }
 }
 
@@ -83,6 +95,7 @@ export const SplatUniforms = d.struct({
   radius: d.f32,
   intensity: d.f32,
   grid_size: d.u32,
+  dye_size: d.u32,
 });
 
 export const AdvectUniforms = d.struct({

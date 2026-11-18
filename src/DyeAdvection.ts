@@ -1,5 +1,7 @@
 import { d, std, tgpu, type TgpuBindGroup, type TgpuRoot } from "typegpu";
 
+export type DyeTransport = "linear" | "maccormack";
+
 const WORKGROUP_SIZE = 8;
 const sampledField = { texture: d.texture2d(d.f32), sampleType: "float" as const };
 const transportLayout = tgpu.bindGroupLayout({
@@ -30,11 +32,11 @@ export class DyeAdvection {
   private readonly cache: {
     views: GPUTextureView[];
     prediction: TransportGroup;
-    correction: TransportGroup;
-    predicted: CorrectionGroup;
+    correction?: TransportGroup;
+    predicted?: CorrectionGroup;
   }[] = [];
 
-  constructor(private readonly root: TgpuRoot, dt: number) {
+  constructor(private readonly root: TgpuRoot, dt: number, transport: DyeTransport) {
     const sampler = root.createSampler({ magFilter: "linear", minFilter: "linear" });
     const step = tgpu.const(d.f32, dt);
 
@@ -78,7 +80,7 @@ export class DyeAdvection {
         std.textureStore(transportLayout.$.output, id.xy, d.vec4f(dye));
       }),
     });
-    this.correct = root.createComputePipeline({
+    this.correct = transport === "maccormack" ? root.createComputePipeline({
       compute: entry(({ id }) => {
         "use gpu";
         const size = std.textureDimensions(transportLayout.$.source);
@@ -104,7 +106,7 @@ export class DyeAdvection {
         }
         std.textureStore(transportLayout.$.output, id.xy, d.vec4f(dye));
       }),
-    });
+    }) : undefined;
   }
 
   advect(
@@ -122,10 +124,12 @@ export class DyeAdvection {
       bindings = {
         views,
         prediction: this.root.createBindGroup(transportLayout, {
-          source, output: predicted, horizontal, vertical,
+          source, output: this.correct ? predicted : output, horizontal, vertical,
         }),
-        correction: this.root.createBindGroup(transportLayout, { source, output, horizontal, vertical }),
-        predicted: this.root.createBindGroup(correctionLayout, { predicted }),
+        correction: this.correct
+          ? this.root.createBindGroup(transportLayout, { source, output, horizontal, vertical })
+          : undefined,
+        predicted: this.correct ? this.root.createBindGroup(correctionLayout, { predicted }) : undefined,
       };
       this.cache.push(bindings);
     }
@@ -133,7 +137,9 @@ export class DyeAdvection {
     const groups = Math.ceil((dyeSize + 2) / WORKGROUP_SIZE);
     const pass = encoder.beginComputePass({ label: "dye advection" });
     this.predict.with(bindings.prediction).with(pass).dispatchWorkgroups(groups, groups);
-    this.correct.with(bindings.correction).with(bindings.predicted).with(pass).dispatchWorkgroups(groups, groups);
+    if (this.correct && bindings.correction && bindings.predicted) {
+      this.correct.with(bindings.correction).with(bindings.predicted).with(pass).dispatchWorkgroups(groups, groups);
+    }
     pass.end();
   }
 }
