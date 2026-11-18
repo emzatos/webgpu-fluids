@@ -22,7 +22,11 @@ export class FluidSimulation {
     GPUComputePipeline, { views: readonly GPUTextureView[]; group: GPUBindGroup }[]
   >();
 
-  constructor(private readonly root: TgpuRoot, private readonly textureSize: number) {
+  constructor(
+    private readonly root: TgpuRoot,
+    private readonly textureSize: number,
+    { startEmpty = false }: { startEmpty?: boolean } = {}
+  ) {
     const { device } = root;
     this.device = device;
     this.workgroups = Math.ceil(textureSize / WORKGROUP_SIZE);
@@ -30,14 +34,15 @@ export class FluidSimulation {
       magFilter: "linear",
       minFilter: "linear",
     });
-    var [velXData, velYData] = this.initializeVelocity(textureSize);
-    var zeroData = new Float32Array({
-      length: (textureSize + 2) * (textureSize + 2),
-    }).fill(0.0);
+    const zeroData = new Float32Array((textureSize + 2) ** 2);
+    const [velXData, velYData] = startEmpty
+      ? [zeroData, zeroData]
+      : this.initializeVelocity(textureSize);
 
     this.densities = new DensityTextures({
       device,
       textureSize: textureSize + 2,
+      data: startEmpty ? zeroData : undefined,
     });
 
     this.velX = new DensityTextures({
