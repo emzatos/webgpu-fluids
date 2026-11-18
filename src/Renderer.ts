@@ -6,7 +6,6 @@ const FragmentUniforms = d.struct({ time: d.f32, palette: d.u32 });
 export class Renderer {
   private device: GPUDevice;
   private context: GPUCanvasContext;
-  private canvas: HTMLCanvasElement;
   private presentationFormat: GPUTextureFormat;
   private renderPipeline!: GPURenderPipeline;
   private renderPassDescriptor!: GPURenderPassDescriptor & {
@@ -14,22 +13,15 @@ export class Renderer {
   };
   private sampler!: GPUSampler;
   private readonly fragmentUniforms;
-  private canvasToSizeMap: WeakMap<
-    HTMLCanvasElement,
-    { width: number; height: number }
-  >;
 
   constructor(
     private readonly root: TgpuRoot,
-    canvas: HTMLCanvasElement,
     context: GPUCanvasContext
   ) {
     this.device = root.device;
     this.fragmentUniforms = root.createBuffer(FragmentUniforms).$usage("uniform");
-    this.canvas = canvas;
     this.context = context;
     this.presentationFormat = navigator.gpu.getPreferredCanvasFormat();
-    this.canvasToSizeMap = new WeakMap();
 
     this.initializeRenderer(shaders);
   }
@@ -80,33 +72,11 @@ export class Renderer {
 
   }
 
-  private resizeCanvasToDisplaySize(): boolean {
-    const dimensions = this.canvasToSizeMap.get(this.canvas) || this.canvas;
-    const width = Math.max(
-      1,
-      Math.min(dimensions.width, this.device.limits.maxTextureDimension2D)
-    );
-    const height = Math.max(
-      1,
-      Math.min(dimensions.height, this.device.limits.maxTextureDimension2D)
-    );
-
-    const needResize =
-      this.canvas.width !== width || this.canvas.height !== height;
-    if (needResize) {
-      this.canvas.width = width;
-      this.canvas.height = height;
-    }
-
-    return needResize;
-  }
-
   public render = (
     encoder: GPUCommandEncoder,
     textureView: GPUTextureView,
     palette: number
   ): void => {
-    this.resizeCanvasToDisplaySize();
     // Update render pass descriptor with current texture view
     this.renderPassDescriptor.colorAttachments[0].view = this.context
       .getCurrentTexture()
