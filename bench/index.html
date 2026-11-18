@@ -19,6 +19,11 @@
       <option value="spiral">Fast spiral</option>
       <option value="wall">Wall drag</option>
     </select>
+    <label for="transport">Dye advection</label>
+    <select id="transport">
+      <option value="maccormack">Limited MacCormack</option>
+      <option value="linear">Linear baseline</option>
+    </select>
     <button id="run">Run benchmark</button>
     <canvas width="640" height="480" aria-label="Fluid replay"></canvas>
     <pre id="results" role="status">Ready</pre>

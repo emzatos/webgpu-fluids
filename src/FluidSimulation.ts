@@ -1,6 +1,7 @@
+import { DyeAdvection } from "./DyeAdvection";
 import { DensityTextures } from "./DensityTextures";
 import {
-  ComputePipelines, diffusionLayout, divergenceLayout, pressureLayout, projectionLayout,
+  ADVECTION_DT, ComputePipelines, diffusionLayout, divergenceLayout, pressureLayout, projectionLayout,
 } from "./ComputePipelines";
 import { d, type TgpuBindGroup, type TgpuRoot } from "typegpu";
 
@@ -8,9 +9,17 @@ const WORKGROUP_SIZE = 8;
 const DIFFUSION_ITERATIONS = 20;
 const PRESSURE_ITERATIONS = 200;
 
+export type DyeTransport = "linear" | "maccormack";
+
+interface SimulationOptions {
+  startEmpty?: boolean;
+  dyeTransport?: DyeTransport;
+}
+
 export class FluidSimulation {
   private device: GPUDevice;
   private readonly workgroups: number;
+  private readonly dyeAdvection?: DyeAdvection;
   private densities: DensityTextures;
   private velX: DensityTextures;
   private velY: DensityTextures;
@@ -25,7 +34,7 @@ export class FluidSimulation {
   constructor(
     private readonly root: TgpuRoot,
     private readonly textureSize: number,
-    { startEmpty = false }: { startEmpty?: boolean } = {}
+    { startEmpty = false, dyeTransport = "maccormack" }: SimulationOptions = {}
   ) {
     const { device } = root;
     this.device = device;
@@ -70,6 +79,7 @@ export class FluidSimulation {
     });
 
     this.computePipelines = new ComputePipelines(root, textureSize);
+    if (dyeTransport === "maccormack") this.dyeAdvection = new DyeAdvection(root, ADVECTION_DT);
   }
 
   private initializeVelocity = (
@@ -178,7 +188,15 @@ export class FluidSimulation {
   private densityUpdate(encoder: GPUCommandEncoder) {
     const { density } = this.computePipelines.fieldUniforms;
     this.performDiffusion(encoder, this.densities, density.diffusion);
-    this.performAdvection(encoder, this.densities, this.velX.readView, this.velY.readView, density.advection);
+    const horizontal = this.velX.readView;
+    const vertical = this.velY.readView;
+    if (this.dyeAdvection) {
+      const { readView, prevView, writeView } = this.densities;
+      this.dyeAdvection.advect(encoder, this.textureSize, readView, prevView, writeView, horizontal, vertical);
+      this.densities.flip();
+    } else {
+      this.performAdvection(encoder, this.densities, horizontal, vertical, density.advection);
+    }
   }
 
   private performDiffusion(

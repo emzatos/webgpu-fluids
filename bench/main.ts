@@ -1,5 +1,5 @@
 import { tgpu } from "typegpu";
-import { FluidSimulation } from "../src/FluidSimulation";
+import { FluidSimulation, type DyeTransport } from "../src/FluidSimulation";
 import { Renderer } from "../src/Renderer";
 
 const GRID = 256;
@@ -21,6 +21,7 @@ const canvas = document.querySelector("canvas")!;
 const results = document.querySelector<HTMLPreElement>("#results")!;
 const runButton = document.querySelector<HTMLButtonElement>("#run")!;
 const scene = document.querySelector<HTMLSelectElement>("#scene")!;
+const transport = document.querySelector<HTMLSelectElement>("#transport")!;
 
 function percentile(values: number[], fraction: number) {
   return [...values].sort((a, b) => a - b)[Math.ceil(values.length * fraction) - 1].toFixed(2);
@@ -51,6 +52,7 @@ async function readFields(device: GPUDevice, textures: GPUTexture[]) {
 runButton.addEventListener("click", async () => {
   runButton.disabled = true;
   scene.disabled = true;
+  transport.disabled = true;
   results.textContent = "Running stroke replay…";
   let device: GPUDevice | undefined;
 
@@ -58,7 +60,10 @@ runButton.addEventListener("click", async () => {
     const root = await tgpu.init({ device: { requiredFeatures: ["float32-filterable"] } });
     device = root.device;
     device.pushErrorScope("validation");
-    const simulation = new FluidSimulation(root, GRID, { startEmpty: true });
+    const simulation = new FluidSimulation(root, GRID, {
+      startEmpty: true,
+      dyeTransport: transport.value as DyeTransport,
+    });
     const renderer = new Renderer(root, root.configureContext({ canvas }));
     const stroke = strokes[scene.value as keyof typeof strokes];
     const position = (t: number) => stroke(t).map((coordinate) => 1 + coordinate * (GRID - 1));
@@ -134,6 +139,7 @@ runButton.addEventListener("click", async () => {
   } finally {
     runButton.disabled = false;
     scene.disabled = false;
+    transport.disabled = false;
     // Allow the last submitted image to be presented before releasing test resources.
     if (device) {
       const finishedDevice = device;

@@ -5,6 +5,8 @@ import projectShader from "./shaders/project.wgsl?raw";
 import splatShader from "./shaders/splat.wgsl?raw";
 import { d, tgpu, type TgpuBindGroupLayout, type TgpuRoot } from "typegpu";
 
+export const ADVECTION_DT = 0.02;
+
 export class ComputePipelines {
   readonly diffusionData;
   readonly fieldUniforms;
@@ -45,7 +47,7 @@ export class ComputePipelines {
         diffusion_constant: 0.0001, dt: diffusionDt, grid_size: textureSize, boundaryValue,
       }).$usage("uniform"),
       advection: root.createBuffer(AdvectUniforms, {
-        dt: 0.02, grid_size: textureSize, boundaryValue,
+        dt: ADVECTION_DT, grid_size: textureSize, boundaryValue,
       }).$usage("uniform"),
     });
     this.fieldUniforms = {
