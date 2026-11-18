@@ -1,7 +1,8 @@
 import "./style.css";
 import { tgpu } from "typegpu";
 import { attachAutoResizer } from "typegpu/common";
-import { MouseHandler } from "./MouseHandler";
+import { BrushInput, type BrushPoint } from "./BrushInput";
+import { SimulationClock } from "./SimulationClock";
 import { FluidSimulation } from "./FluidSimulation";
 import { Renderer } from "./Renderer";
 import { settings } from "./settings";
@@ -12,6 +13,13 @@ import { FluidControls } from "./FluidControls";
 const controlsRoot = document.getElementById("fluid-controls");
 if (controlsRoot) {
   createRoot(controlsRoot).render(createElement(FluidControls));
+}
+
+function interpolate(start: BrushPoint, end: BrushPoint, fraction: number): BrushPoint {
+  return {
+    x: start.x + (end.x - start.x) * fraction,
+    y: start.y + (end.y - start.y) * fraction,
+  };
 }
 
 async function main() {
@@ -33,10 +41,12 @@ async function main() {
 
   let dyeSize = settings.dyeSize;
   let simulation = new FluidSimulation(root, textureSize, { dyeSize });
-  const mouseHandler = new MouseHandler(canvas, textureSize);
+  const brushInput = new BrushInput(canvas, textureSize);
   const renderer = new Renderer(root, context);
 
-  function render() {
+  const clock = new SimulationClock();
+
+  function render(timestamp: number) {
     if (settings.dyeSize !== dyeSize) {
       dyeSize = settings.dyeSize;
       simulation.destroy();
@@ -48,30 +58,26 @@ async function main() {
     });
     const encoder = root.unwrap(frame);
 
-    if (mouseHandler.mouseDown) {
-      simulation.splat(
-        encoder,
-        mouseHandler.mousePosition.x,
-        mouseHandler.mousePosition.y,
-        (mouseHandler.mousePosition.x - mouseHandler.lastMousePosition.x) * 0.1,
-        (mouseHandler.mousePosition.y - mouseHandler.lastMousePosition.y) * 0.1,
-        settings.brushRadius,
-        1
-      );
+    const steps = clock.advance(timestamp);
+    const stroke = steps > 0 ? brushInput.takeStroke() : undefined;
+    for (let step = 0; step < steps; step++) {
+      if (stroke) {
+        simulation.splat(
+          encoder,
+          interpolate(stroke.start, stroke.end, step / steps),
+          interpolate(stroke.start, stroke.end, (step + 1) / steps),
+          settings.brushRadius, 1, step
+        );
+      }
+      simulation.update(encoder);
     }
-
-    simulation.update(encoder);
     renderer.render(frame, simulation.getDensityView(), settings.palette);
 
     frame.submit();
 
-    mouseHandler.lastMousePosition = {
-      x: mouseHandler.mousePosition.x,
-      y: mouseHandler.mousePosition.y,
-    };
     requestAnimationFrame(render);
   }
-  render();
+  requestAnimationFrame(render);
 }
 
 main();

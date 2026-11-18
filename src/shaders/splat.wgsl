@@ -1,6 +1,6 @@
 struct SplatUniforms {
-    position: vec2f,
-    delta: vec2f,
+    start: vec2f,
+    end: vec2f,
     radius: f32,
     intensity: f32,
     grid_size: u32,
@@ -15,8 +15,9 @@ struct SplatUniforms {
 @group(0) @binding(5) var vertical: texture_2d<f32>;
 @group(0) @binding(6) var verticalOutput: texture_storage_2d<r32float, write>;
 
-fn influence(position: vec2f) -> f32 {
-    let distanceToBrush = distance(position, uniforms.position);
+fn influence(position: vec2f, stroke: vec2f) -> f32 {
+    let progress = clamp(dot(position - uniforms.start, stroke) / max(dot(stroke, stroke), 1e-10), 0.0, 1.0);
+    let distanceToBrush = distance(position, uniforms.start + progress * stroke);
     if (distanceToBrush >= uniforms.radius) { return 0.0; }
     return 1.0 - distanceToBrush / uniforms.radius;
 }
@@ -26,18 +27,19 @@ fn splat(@builtin(global_invocation_id) id: vec3u) {
     let cell = id.xy + vec2u(1);
     let velocitySize = uniforms.grid_size;
     let dyeSize = uniforms.dye_size;
+    let stroke = uniforms.end - uniforms.start;
 
     if (all(cell <= vec2u(dyeSize))) {
         let velocityPosition = (vec2f(cell) - 0.5) * (f32(velocitySize) / f32(dyeSize)) + 0.5;
-        let weight = influence(velocityPosition);
+        let weight = influence(velocityPosition, stroke);
         var dye = textureLoad(density, cell, 0).r;
         if (weight > 0.0) { dye = (dye + weight * uniforms.intensity) * 0.99; }
         writeField(densityOutput, cell, dyeSize, SCALAR_FIELD, dye);
     }
     if (all(cell <= vec2u(velocitySize))) {
-        let weight = influence(vec2f(cell));
+        let weight = influence(vec2f(cell), stroke);
         var velocity = vec2f(textureLoad(horizontal, cell, 0).r, textureLoad(vertical, cell, 0).r);
-        if (weight > 0.0) { velocity = (velocity + uniforms.delta * (weight * uniforms.intensity)) * 1.01; }
+        if (weight > 0.0) { velocity = (velocity + stroke * (0.1 * weight * uniforms.intensity)) * 1.01; }
         writeField(horizontalOutput, cell, velocitySize, HORIZONTAL_VELOCITY, velocity.x);
         writeField(verticalOutput, cell, velocitySize, VERTICAL_VELOCITY, velocity.y);
     }

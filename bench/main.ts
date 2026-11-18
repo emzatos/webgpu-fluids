@@ -1,4 +1,4 @@
-import { tgpu } from "typegpu";
+import { tgpu, type TgpuRoot } from "typegpu";
 import { FluidSimulation } from "../src/FluidSimulation";
 import type { DyeTransport } from "../src/DyeAdvection";
 import { Renderer } from "../src/Renderer";
@@ -52,6 +52,23 @@ async function readFields(device: GPUDevice, textures: GPUTexture[]) {
   }));
 }
 
+async function verifyBrush(root: TgpuRoot) {
+  const simulation = new FluidSimulation(root, 16, { startEmpty: true });
+  try {
+    const encoder = root.device.createCommandEncoder();
+    simulation.splat(encoder, { x: 3, y: 4 }, { x: 13, y: 4 }, 2, 1, 0);
+    simulation.splat(encoder, { x: 3, y: 12 }, { x: 13, y: 12 }, 2, 1, 1);
+    root.device.queue.submit([encoder.finish()]);
+    const [{ values, stride }] = await readFields(root.device, [simulation.getDensityTexture()]);
+    if (values[4 * stride + 8] < 0.9 || values[12 * stride + 8] < 0.9
+        || values[8 * stride + 8] !== 0) {
+      throw Error("Brush test failed. Expected two separate, continuous strokes in one submission.");
+    }
+  } finally {
+    simulation.destroy();
+  }
+}
+
 runButton.addEventListener("click", async () => {
   runButton.disabled = true;
   scene.disabled = true;
@@ -86,7 +103,7 @@ runButton.addEventListener("click", async () => {
       if (step >= 0 && step < STROKE_STEPS) {
         const [x, y] = position(step / (STROKE_STEPS - 1));
         const [previousX, previousY] = position(Math.max(0, step - 1) / (STROKE_STEPS - 1));
-        simulation.splat(encoder, x, y, (x - previousX) * 0.1, (y - previousY) * 0.1, 3, 1);
+        simulation.splat(encoder, { x: previousX, y: previousY }, { x, y }, 3, 1);
       }
       simulation.update(encoder);
       renderer.render(frame, simulation.getDensityView(), 1);
@@ -104,6 +121,7 @@ runButton.addEventListener("click", async () => {
       simulation.getVelXTexture(),
       simulation.getVelYTexture(),
     ]);
+    await verifyBrush(root);
     const error = await device.popErrorScope();
     if (error) throw error;
 
@@ -138,7 +156,7 @@ runButton.addEventListener("click", async () => {
     }
 
     results.textContent = [
-      "PASS · WebGPU validation and field checks",
+      "PASS · WebGPU, field, and brush checks",
       `${encoding.length} measured frames · ${GRID}² velocity · ${dyeSize}² dye · one frame in flight`,
       `CPU encode + submit: ${percentile(encoding, 0.5)} ms median · ${percentile(encoding, 0.95)} ms p95`,
       `Submit to completion: ${percentile(completion, 0.5)} ms median · ${percentile(completion, 0.95)} ms p95`,

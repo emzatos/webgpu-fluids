@@ -1,4 +1,5 @@
 import { DyeAdvection, type DyeTransport } from "./DyeAdvection";
+import type { BrushPoint } from "./BrushInput";
 import { DensityTextures } from "./DensityTextures";
 import {
   ADVECTION_DT, ComputePipelines, diffusionLayout, divergenceLayout, pressureLayout, projectionLayout,
@@ -124,19 +125,19 @@ export class FluidSimulation {
 
   public splat(
     encoder: GPUCommandEncoder,
-    x: number,
-    y: number,
-    dx: number,
-    dy: number,
+    start: BrushPoint,
+    end: BrushPoint,
     radius: number,
-    intensity: number
+    intensity: number,
+    uniformSlot = 0
   ) {
     const splatPass = encoder.beginComputePass(
       this.computePipelines.splatData.descriptor
     );
-    this.computePipelines.splatData.uniforms.write({
-      pos: d.vec2f(x, y),
-      delta: d.vec2f(dx, dy),
+    const uniforms = this.computePipelines.splatData.uniforms[uniformSlot];
+    uniforms.write({
+      start: d.vec2f(start.x, start.y),
+      end: d.vec2f(end.x, end.y),
       radius: radius,
       intensity: intensity,
       grid_size: this.textureSize,
@@ -147,7 +148,7 @@ export class FluidSimulation {
       entries: [
         {
           binding: 0,
-          resource: { buffer: this.root.unwrap(this.computePipelines.splatData.uniforms) },
+          resource: { buffer: this.root.unwrap(uniforms) },
         },
         {
           binding: 1,

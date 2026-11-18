@@ -3,6 +3,7 @@ import diffuseShader from "./shaders/diffuse.wgsl?raw";
 import advectShader from "./shaders/advect.wgsl?raw";
 import projectShader from "./shaders/project.wgsl?raw";
 import splatShader from "./shaders/splat.wgsl?raw";
+import { MAX_STEPS_PER_FRAME } from "./SimulationClock";
 import { d, tgpu, type TgpuBindGroupLayout, type TgpuRoot } from "typegpu";
 
 export const ADVECTION_DT = 0.02;
@@ -67,7 +68,10 @@ export class ComputePipelines {
     this.splatData = {
       pipeline: createPipeline(createModule("splat", splatShader), "splat"),
       descriptor: { label: "splat pass" },
-      uniforms: root.createBuffer(SplatUniforms).$usage("uniform"),
+      // Each step recorded before submission needs its own queue-written values.
+      uniforms: Array.from({ length: MAX_STEPS_PER_FRAME }, () =>
+        root.createBuffer(SplatUniforms).$usage("uniform")
+      ),
     };
   }
   destroy() {
@@ -78,7 +82,7 @@ export class ComputePipelines {
       advection.destroy();
     }
     this.projectionUniforms.destroy();
-    this.splatData.uniforms.destroy();
+    for (const uniform of this.splatData.uniforms) uniform.destroy();
   }
 }
 
@@ -90,8 +94,8 @@ const DiffusionUniforms = d.struct({
 });
 
 export const SplatUniforms = d.struct({
-  pos: d.vec2f,
-  delta: d.vec2f,
+  start: d.vec2f,
+  end: d.vec2f,
   radius: d.f32,
   intensity: d.f32,
   grid_size: d.u32,

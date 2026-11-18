@@ -3,6 +3,7 @@ html, body {
   height: 100%;    /* make the html,body fill the page   */
 }
 canvas {
+  touch-action: none;
   display: block;  /* make the canvas act like a block   */
   width: 100%;     /* make the canvas fill its container */
   height: 100%;
