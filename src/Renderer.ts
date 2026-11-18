@@ -1,6 +1,7 @@
-import { u32, f32, struct } from "typegpu/data/index";
+import { d, type TgpuRoot } from "typegpu";
 import shaders from "./shaders.wgsl?raw";
-import tgpu from "typegpu";
+
+const FragmentUniforms = d.struct({ time: d.f32, palette: d.u32 });
 
 export class Renderer {
   private device: GPUDevice;
@@ -12,18 +13,19 @@ export class Renderer {
     colorAttachments: [GPURenderPassColorAttachment];
   };
   private sampler!: GPUSampler;
-  private fragmentUniforms: any; // Using any for tgpu type
+  private readonly fragmentUniforms;
   private canvasToSizeMap: WeakMap<
     HTMLCanvasElement,
     { width: number; height: number }
   >;
 
   constructor(
-    device: GPUDevice,
+    private readonly root: TgpuRoot,
     canvas: HTMLCanvasElement,
     context: GPUCanvasContext
   ) {
-    this.device = device;
+    this.device = root.device;
+    this.fragmentUniforms = root.createBuffer(FragmentUniforms).$usage("uniform");
     this.canvas = canvas;
     this.context = context;
     this.presentationFormat = navigator.gpu.getPreferredCanvasFormat();
@@ -76,15 +78,6 @@ export class Renderer {
       minFilter: "linear",
     });
 
-    const FragmentUniforms = struct({
-      time: f32,
-      palette: u32,
-    });
-
-    this.fragmentUniforms = tgpu
-      .createBuffer(FragmentUniforms)
-      .$device(this.device)
-      .$usage(tgpu.Uniform);
   }
 
   private resizeCanvasToDisplaySize(): boolean {
@@ -120,7 +113,7 @@ export class Renderer {
       .createView();
 
     // Update simulation and uniforms
-    this.fragmentUniforms.write({ time: performance.now() / 2000, palette: u32(palette) });
+    this.fragmentUniforms.write({ time: performance.now() / 2000, palette });
 
     // Create bind group for rendering
     const renderBindGroup = this.device.createBindGroup({
@@ -136,7 +129,7 @@ export class Renderer {
         },
         {
           binding: 2,
-          resource: this.fragmentUniforms,
+          resource: { buffer: this.root.unwrap(this.fragmentUniforms) },
         },
       ],
     });

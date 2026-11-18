@@ -1,6 +1,6 @@
 import { DensityTextures } from "./DensityTextures";
 import { ComputePipelines } from "./ComputePipelines";
-import { vec2f } from "typegpu/data/index";
+import { d, type TgpuRoot } from "typegpu";
 
 export class FluidSimulation {
   private device: GPUDevice;
@@ -13,7 +13,8 @@ export class FluidSimulation {
   private computePipelines: ComputePipelines;
   private sampler: GPUSampler;
 
-  constructor(device: GPUDevice, textureSize: number) {
+  constructor(private readonly root: TgpuRoot, textureSize: number) {
+    const { device } = root;
     this.device = device;
     this.textureSize = textureSize;
     this.sampler = device.createSampler({
@@ -54,7 +55,7 @@ export class FluidSimulation {
       data: zeroData,
     });
 
-    this.computePipelines = new ComputePipelines(device, textureSize);
+    this.computePipelines = new ComputePipelines(root, textureSize);
   }
 
   private initializeVelocity = (
@@ -97,8 +98,8 @@ export class FluidSimulation {
       this.computePipelines.splatData.descriptor
     );
     this.computePipelines.splatData.uniforms.write({
-      pos: vec2f(x, y),
-      delta: vec2f(dx, dy),
+      pos: d.vec2f(x, y),
+      delta: d.vec2f(dx, dy),
       radius: radius,
       intensity: intensity,
       grid_size: this.textureSize,
@@ -108,7 +109,7 @@ export class FluidSimulation {
       entries: [
         {
           binding: 0,
-          resource: this.computePipelines.splatData.uniforms,
+          resource: { buffer: this.root.unwrap(this.computePipelines.splatData.uniforms) },
         },
         {
           binding: 1,
@@ -248,7 +249,7 @@ export class FluidSimulation {
         entries: [
           {
             binding: 0,
-            resource: this.computePipelines.diffusionData.uniforms,
+            resource: { buffer: this.root.unwrap(this.computePipelines.diffusionData.uniforms) },
           },
           {
             binding: 1,
@@ -290,7 +291,7 @@ export class FluidSimulation {
       entries: [
         {
           binding: 0,
-          resource: this.computePipelines.advectData.uniforms,
+          resource: { buffer: this.root.unwrap(this.computePipelines.advectData.uniforms) },
         },
         {
           binding: 1,
@@ -454,7 +455,7 @@ export class FluidSimulation {
       entries: [
         {
           binding: 0,
-          resource: this.computePipelines.projectStageOneData.uniforms,
+          resource: { buffer: this.root.unwrap(this.computePipelines.projectStageOneData.uniforms) },
         },
         {
           binding: 1,

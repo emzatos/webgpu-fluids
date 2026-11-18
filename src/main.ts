@@ -1,4 +1,5 @@
 import "./style.css";
+import { tgpu } from "typegpu";
 import { MouseHandler } from "./MouseHandler";
 import { FluidSimulation } from "./FluidSimulation";
 import { Renderer } from "./Renderer";
@@ -23,6 +24,7 @@ async function main() {
     return;
   }
 
+  const root = tgpu.initFromDevice({ device });
   const canvas = document.querySelector("canvas") as HTMLCanvasElement;
   const context = canvas.getContext("webgpu") as GPUCanvasContext;
   const textureSize = 256;
@@ -38,9 +40,9 @@ async function main() {
 
   observer.observe(canvas);
 
-  const simulation = new FluidSimulation(device, textureSize);
+  const simulation = new FluidSimulation(root, textureSize);
   const mouseHandler = new MouseHandler(canvas, textureSize);
-  const renderer = new Renderer(device, canvas, context);
+  const renderer = new Renderer(root, canvas, context);
 
   function resizeCanvasToDisplaySize(): boolean {
     const dimensions = canvasToSizeMap.get(canvas) || canvas;
