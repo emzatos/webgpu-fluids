@@ -1,3 +1,4 @@
+import boundaryShader from "./shaders/boundary.wgsl?raw";
 import diffuseShader from "./shaders/diffuse.wgsl?raw";
 import advectShader from "./shaders/advect.wgsl?raw";
 import projectShader from "./shaders/project.wgsl?raw";
@@ -6,8 +7,7 @@ import { d, tgpu, type TgpuBindGroupLayout, type TgpuRoot } from "typegpu";
 
 export class ComputePipelines {
   readonly diffusionData;
-  readonly velocityDiffusionUniforms;
-  readonly densityDiffusionUniforms;
+  readonly fieldUniforms;
   readonly advectData;
   readonly divergencePipeline;
   readonly pressurePipeline;
@@ -18,7 +18,7 @@ export class ComputePipelines {
   constructor(root: TgpuRoot, textureSize: number) {
     const { device } = root;
     const createModule = (label: string, code: string) =>
-      device.createShaderModule({ label, code });
+      device.createShaderModule({ label, code: boundaryShader + "\n" + code });
 
     const createPipeline = (
       module: GPUShaderModule,
@@ -40,22 +40,22 @@ export class ComputePipelines {
       pipeline: createPipeline(createModule("diffusion", diffuseShader), "diffuse"),
       descriptor: { label: "diffuse pass" },
     };
-    const diffusionUniforms = (dt: number) => root.createBuffer(DiffusionUniforms, {
-      diffusion_constant: 0.0001,
-      dt,
-      grid_size: textureSize,
-      boundaryValue: 2,
-    }).$usage("uniform");
-    this.velocityDiffusionUniforms = diffusionUniforms(0.002);
-    this.densityDiffusionUniforms = diffusionUniforms(0.02);
+    const fieldUniforms = (boundaryValue: number, diffusionDt: number) => ({
+      diffusion: root.createBuffer(DiffusionUniforms, {
+        diffusion_constant: 0.0001, dt: diffusionDt, grid_size: textureSize, boundaryValue,
+      }).$usage("uniform"),
+      advection: root.createBuffer(AdvectUniforms, {
+        dt: 0.02, grid_size: textureSize, boundaryValue,
+      }).$usage("uniform"),
+    });
+    this.fieldUniforms = {
+      density: fieldUniforms(0, 0.02),
+      horizontal: fieldUniforms(1, 0.002),
+      vertical: fieldUniforms(2, 0.002),
+    };
     this.advectData = {
       pipeline: createPipeline(createModule("advection", advectShader), "advect"),
       descriptor: { label: "advect pass" },
-      uniforms: root.createBuffer(AdvectUniforms, {
-        dt: 0.02,
-        grid_size: textureSize,
-        boundaryValue: 2,
-      }).$usage("uniform"),
     };
     this.divergencePipeline = createPipeline(project, "update_divergence", divergenceLayout);
     this.pressurePipeline = createPipeline(project, "update_pressure", pressureLayout);

@@ -83,17 +83,11 @@ export class DensityTextures {
     ];
   }
 
-  swap() {
+  swapWriteAndScratch() {
     [this.prevTexture, this.writeTexture] = [
       this.writeTexture,
       this.prevTexture,
     ];
   }
 
-  setAll() {
-    [this.readTexture, this.prevTexture] = [
-      this.writeTexture,
-      this.writeTexture,
-    ];
-  }
 }

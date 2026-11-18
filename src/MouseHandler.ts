@@ -19,17 +19,19 @@ export class MouseHandler {
 
     this.canvas.addEventListener("mousedown", this.onMouseDown);
 
-    this.canvas.addEventListener("mouseup", this.onMouseUp);
+    window.addEventListener("mouseup", this.onMouseUp);
   }
 
   private onMouseMove = (e: MouseEvent) => {
     const rect = this.canvas.getBoundingClientRect();
-    this.mousePosition.x = (e.clientX / rect.width) * this.textureSize;
-    this.mousePosition.y =
-      this.textureSize - (e.clientY / rect.height) * this.textureSize;
+    const span = this.textureSize - 1;
+    this.mousePosition.x = 1 + ((e.clientX - rect.left) / rect.width) * span;
+    this.mousePosition.y = 1 + (1 - (e.clientY - rect.top) / rect.height) * span;
   };
 
-  private onMouseDown = () => {
+  private onMouseDown = (e: MouseEvent) => {
+    this.onMouseMove(e);
+    this.lastMousePosition = { ...this.mousePosition };
     this.mouseDown = true;
   };
 
