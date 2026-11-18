@@ -319,6 +319,10 @@ export class FluidSimulation {
     pass.end();
   }
 
+  public getDensityView() {
+    return this.densities.readView;
+  }
+
   public getDensityTexture() {
     return this.densities.readTexture;
   }

@@ -27,7 +27,7 @@ async function main() {
 
   const root = tgpu.initFromDevice({ device });
   const canvas = document.querySelector("canvas") as HTMLCanvasElement;
-  const context = canvas.getContext("webgpu") as GPUCanvasContext;
+  const context = root.configureContext({ canvas });
   const textureSize = 256;
   attachAutoResizer({ root, canvas });
 
@@ -54,7 +54,7 @@ async function main() {
     }
 
     simulation.update(encoder);
-    renderer.render(encoder, simulation.getDensityTexture().createView(), settings.palette);
+    renderer.render(frame, simulation.getDensityView(), settings.palette);
 
     frame.submit();
 
