@@ -53,6 +53,12 @@ async function main() {
       simulation = new FluidSimulation(root, textureSize, { dyeSize });
     }
 
+    if (settings.resetRequested) {
+      settings.resetRequested = false;
+      simulation.destroy();
+      simulation = new FluidSimulation(root, textureSize, { dyeSize });
+    }
+
     const frame = root.createCommandEncoder({
       label: "fluid frame",
     });

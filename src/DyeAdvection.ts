@@ -40,6 +40,14 @@ export class DyeAdvection {
     const sampler = root.createSampler({ magFilter: "linear", minFilter: "linear" });
     const step = tgpu.const(d.f32, dt);
 
+    const halfLifeSeconds = 7;
+    const retention = Math.pow(0.5, 1 / (60 * halfLifeSeconds));
+    const finalRetention = tgpu.const(d.f32, retention);
+    const predictorRetention = tgpu.const(
+      d.f32,
+      transport === "linear" ? retention : 1
+    );
+
     const travel = (cell: d.v2f, size: d.v2f): d.v2f => {
       "use gpu";
       const interior = std.sub(size, d.vec2f(2));
@@ -77,7 +85,7 @@ export class DyeAdvection {
         const dye = std.textureSampleLevel(
           transportLayout.$.source, sampler.$, sampleUV(departure, sizeF), 0
         ).r;
-        std.textureStore(transportLayout.$.output, id.xy, d.vec4f(dye));
+        std.textureStore(transportLayout.$.output, id.xy, d.vec4f(dye * predictorRetention.$));
       }),
     });
     this.correct = transport === "maccormack" ? root.createComputePipeline({
@@ -104,7 +112,7 @@ export class DyeAdvection {
           const range = sourceRange(departure, size);
           dye = std.clamp(firstOrder + 0.5 * (original - reverse), range.x, range.y);
         }
-        std.textureStore(transportLayout.$.output, id.xy, d.vec4f(dye));
+        std.textureStore(transportLayout.$.output, id.xy, d.vec4f(dye * finalRetention.$));
       }),
     }) : undefined;
   }

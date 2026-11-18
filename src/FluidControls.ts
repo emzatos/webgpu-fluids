@@ -1,4 +1,4 @@
-import { useControls, Leva } from "leva";
+import { useControls, Leva, button } from "leva";
 import { settings } from "./settings";
 import { createElement } from "react";
 import type { PressureIterations } from "./FluidSimulation";
@@ -27,6 +27,7 @@ export function FluidControls() {
             step: 0.01,
             onChange: (value: number) => { settings.brushRadius = value; },
         },
+        "Reset": button(() => { settings.resetRequested = true; }),
     });
     return createElement(Leva)
 }
