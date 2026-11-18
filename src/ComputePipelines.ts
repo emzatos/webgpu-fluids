@@ -2,16 +2,17 @@ import diffuseShader from "./shaders/diffuse.wgsl?raw";
 import advectShader from "./shaders/advect.wgsl?raw";
 import projectShader from "./shaders/project.wgsl?raw";
 import splatShader from "./shaders/splat.wgsl?raw";
-import { d, type TgpuRoot } from "typegpu";
+import { d, tgpu, type TgpuBindGroupLayout, type TgpuRoot } from "typegpu";
 
 export class ComputePipelines {
   readonly diffusionData;
   readonly velocityDiffusionUniforms;
   readonly densityDiffusionUniforms;
   readonly advectData;
-  readonly projectStageOneData;
-  readonly projectStageTwoData;
-  readonly projectStageThreeData;
+  readonly divergencePipeline;
+  readonly pressurePipeline;
+  readonly projectionPipeline;
+  readonly projectionUniforms;
   readonly splatData;
 
   constructor(root: TgpuRoot, textureSize: number) {
@@ -19,23 +20,21 @@ export class ComputePipelines {
     const createModule = (label: string, code: string) =>
       device.createShaderModule({ label, code });
 
-    const createPipeline = (module: GPUShaderModule, entryPoint: string) =>
+    const createPipeline = (
+      module: GPUShaderModule,
+      entryPoint: string,
+      layout?: TgpuBindGroupLayout
+    ) =>
       device.createComputePipeline({
         label: entryPoint,
-        layout: "auto",
+        layout: layout ? device.createPipelineLayout({ bindGroupLayouts: [root.unwrap(layout)] }) : "auto",
         compute: { module, entryPoint },
       });
 
     const project = createModule("projection", projectShader);
-    const projectionUniforms = root.createBuffer(ProjectionUniforms, {
+    this.projectionUniforms = root.createBuffer(ProjectionUniforms, {
       grid_size: textureSize,
-      boundaryValue: 2,
     }).$usage("uniform");
-    const projectionData = (entryPoint: string) => ({
-      pipeline: createPipeline(project, entryPoint),
-      descriptor: { label: entryPoint },
-      uniforms: projectionUniforms,
-    });
 
     this.diffusionData = {
       pipeline: createPipeline(createModule("diffusion", diffuseShader), "diffuse"),
@@ -58,9 +57,9 @@ export class ComputePipelines {
         boundaryValue: 2,
       }).$usage("uniform"),
     };
-    this.projectStageOneData = projectionData("update_divergence");
-    this.projectStageTwoData = projectionData("update_pressure");
-    this.projectStageThreeData = projectionData("apply_to_velocities");
+    this.divergencePipeline = createPipeline(project, "update_divergence", divergenceLayout);
+    this.pressurePipeline = createPipeline(project, "update_pressure", pressureLayout);
+    this.projectionPipeline = createPipeline(project, "apply_to_velocities", projectionLayout);
     this.splatData = {
       pipeline: createPipeline(createModule("splat", splatShader), "splat"),
       descriptor: { label: "splat pass" },
@@ -90,7 +89,40 @@ export const AdvectUniforms = d.struct({
   boundaryValue: d.u32,
 });
 
-export const ProjectionUniforms = d.struct({
-  grid_size: d.u32,
-  boundaryValue: d.u32,
+const ProjectionUniforms = d.struct({ grid_size: d.u32 });
+const projectionUniform = { uniform: ProjectionUniforms };
+const readField = { texture: d.texture2d(d.f32), sampleType: "unfilterable-float" as const };
+const writeField = { storageTexture: d.textureStorage2d("r32float") };
+
+// Keep the binding indices in sync with project.wgsl. Null entries reserve unused slots.
+export const divergenceLayout = tgpu.bindGroupLayout({
+  uniforms: projectionUniform,
+  divergence: null,
+  divergenceOutput: writeField,
+  previousPressure: readField,
+  pressure: null,
+  pressureOutput: writeField,
+  horizontal: readField,
+  horizontalOutput: null,
+  vertical: readField,
+});
+export const pressureLayout = tgpu.bindGroupLayout({
+  uniforms: projectionUniform,
+  divergence: readField,
+  divergenceOutput: null,
+  previousPressure: null,
+  pressure: readField,
+  pressureOutput: writeField,
+});
+export const projectionLayout = tgpu.bindGroupLayout({
+  uniforms: projectionUniform,
+  divergence: null,
+  divergenceOutput: null,
+  previousPressure: null,
+  pressure: readField,
+  pressureOutput: null,
+  horizontal: readField,
+  horizontalOutput: writeField,
+  vertical: readField,
+  verticalOutput: writeField,
 });

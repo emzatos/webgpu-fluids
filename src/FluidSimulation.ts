@@ -1,6 +1,8 @@
 import { DensityTextures } from "./DensityTextures";
-import { ComputePipelines } from "./ComputePipelines";
-import { d, type TgpuRoot } from "typegpu";
+import {
+  ComputePipelines, divergenceLayout, pressureLayout, projectionLayout,
+} from "./ComputePipelines";
+import { d, type TgpuBindGroup, type TgpuRoot } from "typegpu";
 
 export class FluidSimulation {
   private device: GPUDevice;
@@ -12,6 +14,9 @@ export class FluidSimulation {
   private pressure: DensityTextures;
   private computePipelines: ComputePipelines;
   private sampler: GPUSampler;
+  private readonly projectionGroups = new Map<
+    GPUComputePipeline, { views: readonly GPUTextureView[]; group: GPUBindGroup }[]
+  >();
 
   constructor(private readonly root: TgpuRoot, textureSize: number) {
     const { device } = root;
@@ -113,27 +118,27 @@ export class FluidSimulation {
         },
         {
           binding: 1,
-          resource: this.densities.readTexture.createView(),
+          resource: this.densities.readView,
         },
         {
           binding: 2,
-          resource: this.densities.writeTexture.createView(),
+          resource: this.densities.writeView,
         },
         {
           binding: 3,
-          resource: this.velX.readTexture.createView(),
+          resource: this.velX.readView,
         },
         {
           binding: 4,
-          resource: this.velX.writeTexture.createView(),
+          resource: this.velX.writeView,
         },
         {
           binding: 5,
-          resource: this.velY.readTexture.createView(),
+          resource: this.velY.readView,
         },
         {
           binding: 6,
-          resource: this.velY.writeTexture.createView(),
+          resource: this.velY.writeView,
         },
       ],
     });
@@ -245,15 +250,15 @@ export class FluidSimulation {
           },
           {
             binding: 1,
-            resource: texture.readTexture.createView(),
+            resource: texture.readView,
           },
           {
             binding: 2,
-            resource: texture.writeTexture.createView(),
+            resource: texture.writeView,
           },
           {
             binding: 3,
-            resource: texture.prevTexture.createView(),
+            resource: texture.prevView,
           },
         ],
       });
@@ -287,15 +292,15 @@ export class FluidSimulation {
         },
         {
           binding: 1,
-          resource: texture.readTexture.createView(),
+          resource: texture.readView,
         },
         {
           binding: 2,
-          resource: texture.writeTexture.createView(),
+          resource: texture.writeView,
         },
         {
           binding: 3,
-          resource: texture.prevTexture.createView(), //unused
+          resource: texture.prevView, //unused
         },
         {
           binding: 4,
@@ -320,175 +325,82 @@ export class FluidSimulation {
   }
 
   private performProjection(encoder: GPUCommandEncoder) {
-    this.computeDivergence(
-      encoder,
-      this.divergence,
-      this.pressure,
-      this.velX,
-      this.velY
+    const { divergence, pressure, velX, velY } = this;
+    const { divergencePipeline, pressurePipeline, projectionPipeline, projectionUniforms } =
+      this.computePipelines;
+    const divergenceGroup = this.projectionGroup(
+      divergencePipeline,
+      [divergence.writeView, pressure.prevView, pressure.writeView, velX.readView, velY.readView],
+      ([divergenceOutput, previousPressure, pressureOutput, horizontal, vertical]) =>
+        this.root.createBindGroup(divergenceLayout, {
+          uniforms: projectionUniforms, divergenceOutput, previousPressure,
+          pressureOutput, horizontal, vertical,
+        })
     );
-    this.computePressure(
-      encoder,
-      this.divergence,
-      this.pressure,
-      this.velX,
-      this.velY
-    );
-    this.projectOnVelocity(
-      encoder,
-      this.divergence,
-      this.pressure,
-      this.velX,
-      this.velY
-    );
-  }
+    this.dispatchProjection(encoder, divergencePipeline, divergenceGroup, "divergence");
+    pressure.flip();
+    pressure.swap();
+    divergence.flip();
 
-  private computeDivergence(
-    encoder: GPUCommandEncoder,
-    div: DensityTextures,
-    pres: DensityTextures,
-    horiz: DensityTextures,
-    vert: DensityTextures
-  ) {
-    const divergencePass = encoder.beginComputePass(
-      this.computePipelines.projectStageOneData.descriptor
-    );
-    const divergenceBindGroup = this.createProjectionBindGroup(
-      this.computePipelines.projectStageOneData.pipeline,
-      div,
-      pres,
-      horiz,
-      vert
-    );
-    divergencePass.setPipeline(
-      this.computePipelines.projectStageOneData.pipeline
-    );
-    divergencePass.setBindGroup(0, divergenceBindGroup);
-    divergencePass.dispatchWorkgroups(
-      this.textureSize / 8,
-      this.textureSize / 8
-    );
-    divergencePass.end();
-    pres.flip();
-    pres.swap();
-    div.flip();
-  }
-
-  private computePressure(
-    encoder: GPUCommandEncoder,
-    div: DensityTextures,
-    pres: DensityTextures,
-    horiz: DensityTextures,
-    vert: DensityTextures
-  ) {
-    for (var i = 0; i < 200; i++) {
-      const pressurePass = encoder.beginComputePass(
-        this.computePipelines.projectStageTwoData.descriptor
+    const pressureGroup = (input: GPUTextureView, output: GPUTextureView) =>
+      this.projectionGroup(
+        pressurePipeline,
+        [divergence.readView, input, output],
+        ([divergence, pressure, pressureOutput]) =>
+          this.root.createBindGroup(pressureLayout, {
+            uniforms: projectionUniforms, divergence, pressure, pressureOutput,
+          })
       );
-      const pressureBindGroup = this.createProjectionBindGroup(
-        this.computePipelines.projectStageTwoData.pipeline,
-        div,
-        pres,
-        horiz,
-        vert
-      );
-      pressurePass.setPipeline(
-        this.computePipelines.projectStageTwoData.pipeline
-      );
-      pressurePass.setBindGroup(0, pressureBindGroup);
-      pressurePass.dispatchWorkgroups(
-        this.textureSize / 8,
-        this.textureSize / 8
-      );
-      pressurePass.end();
-      pres.flip();
+    const forward = pressureGroup(pressure.readView, pressure.writeView);
+    const backward = pressureGroup(pressure.writeView, pressure.readView);
+    for (let i = 0; i < 200; i += 2) {
+      this.dispatchProjection(encoder, pressurePipeline, forward, "pressure");
+      this.dispatchProjection(encoder, pressurePipeline, backward, "pressure");
     }
+
+    const projectionGroup = this.projectionGroup(
+      projectionPipeline,
+      [pressure.readView, velX.readView, velX.writeView, velY.readView, velY.writeView],
+      ([pressure, horizontal, horizontalOutput, vertical, verticalOutput]) =>
+        this.root.createBindGroup(projectionLayout, {
+          uniforms: projectionUniforms, pressure, horizontal, horizontalOutput,
+          vertical, verticalOutput,
+        })
+    );
+    this.dispatchProjection(encoder, projectionPipeline, projectionGroup, "project velocity");
+    velX.flip();
+    velY.flip();
   }
 
-  private projectOnVelocity(
-    encoder: GPUCommandEncoder,
-    div: DensityTextures,
-    pres: DensityTextures,
-    horiz: DensityTextures,
-    vert: DensityTextures
-  ) {
-    const projectionPass = encoder.beginComputePass(
-      this.computePipelines.projectStageThreeData.descriptor
-    );
-    const projectionBindGroup = this.createProjectionBindGroup(
-      this.computePipelines.projectStageThreeData.pipeline,
-      div,
-      pres,
-      horiz,
-      vert
-    );
-    projectionPass.setPipeline(
-      this.computePipelines.projectStageThreeData.pipeline
-    );
-    projectionPass.setBindGroup(0, projectionBindGroup);
-    projectionPass.dispatchWorkgroups(
-      this.textureSize / 8,
-      this.textureSize / 8
-    );
-    projectionPass.end();
-    horiz.flip();
-    vert.flip();
-  }
-
-  private createProjectionBindGroup(
+  private projectionGroup<T extends GPUTextureView[]>(
     pipeline: GPUComputePipeline,
-    div: DensityTextures,
-    pres: DensityTextures,
-    horiz: DensityTextures,
-    vert: DensityTextures
+    views: T,
+    create: (views: T) => TgpuBindGroup
   ): GPUBindGroup {
-    const projectionBindGroup = this.device.createBindGroup({
-      layout: pipeline.getBindGroupLayout(0),
-      entries: [
-        {
-          binding: 0,
-          resource: { buffer: this.root.unwrap(this.computePipelines.projectStageOneData.uniforms) },
-        },
-        {
-          binding: 1,
-          resource: div.readTexture.createView(),
-        },
-        {
-          binding: 2,
-          resource: div.writeTexture.createView(),
-        },
-        {
-          binding: 3,
-          resource: pres.prevTexture.createView(),
-        },
-        {
-          binding: 4,
-          resource: pres.readTexture.createView(),
-        },
-        {
-          binding: 5,
-          resource: pres.writeTexture.createView(),
-        },
-        {
-          binding: 6,
-          resource: horiz.readTexture.createView(),
-        },
-        {
-          binding: 7,
-          resource: horiz.writeTexture.createView(),
-        },
-        {
-          binding: 8,
-          resource: vert.readTexture.createView(),
-        },
-        {
-          binding: 9,
-          resource: vert.writeTexture.createView(),
-        },
-      ],
-    });
+    let groups = this.projectionGroups.get(pipeline);
+    if (!groups) {
+      groups = [];
+      this.projectionGroups.set(pipeline, groups);
+    }
+    const cached = groups.find((entry) => views.every((view, i) => view === entry.views[i]));
+    if (cached) return cached.group;
 
-    return projectionBindGroup;
+    const group = this.root.unwrap(create(views));
+    groups.push({ views, group });
+    return group;
+  }
+
+  private dispatchProjection(
+    encoder: GPUCommandEncoder,
+    pipeline: GPUComputePipeline,
+    group: GPUBindGroup,
+    label: string
+  ) {
+    const pass = encoder.beginComputePass({ label });
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, group);
+    pass.dispatchWorkgroups(this.textureSize / 8, this.textureSize / 8);
+    pass.end();
   }
 
   public getDensityTexture() {

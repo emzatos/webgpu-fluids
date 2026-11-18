@@ -1,6 +1,5 @@
 struct ProjectionUniforms {
     grid_size: u32,
-    boundaryValue: u32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms : ProjectionUniforms;
@@ -22,10 +21,6 @@ struct ProjectionUniforms {
 @compute @workgroup_size(8, 8) fn update_divergence (
     @builtin(global_invocation_id) glob : vec3<u32>,
 ) {
-  _ = divergence_grid;
-  _ = pressure_grid;
-  _ = horizontal_velocity_grid_write;
-  _ = vertical_velocity_grid_write;
 
   // update divergence, neutralize pressure
   let x = glob.x;
@@ -51,12 +46,6 @@ struct ProjectionUniforms {
 @compute @workgroup_size(8, 8) fn update_pressure (
     @builtin(global_invocation_id) glob : vec3<u32>,
 ) {
-  _ = divergence_grid_write;
-  _ = vertical_velocity_grid;
-  _ = vertical_velocity_grid_write;
-  _ = horizontal_velocity_grid;
-  _ = horizontal_velocity_grid_write;
-  _ = prev_pressure_grid;
   // update pressure from divergence
   let x = glob.x;
   let y = glob.y;
@@ -80,10 +69,6 @@ struct ProjectionUniforms {
 @compute @workgroup_size(8, 8) fn apply_to_velocities (
     @builtin(global_invocation_id) glob : vec3<u32>,
 ) {
-  _ = divergence_grid_write;
-  _ = divergence_grid;
-  _ = pressure_grid_write;
-  _ = prev_pressure_grid;
   let x = glob.x;
   let y = glob.y;
   if (x == 0 || y == 0) {

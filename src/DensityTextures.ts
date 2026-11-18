@@ -2,6 +2,7 @@ export class DensityTextures {
   readTexture: GPUTexture;
   writeTexture: GPUTexture;
   prevTexture: GPUTexture;
+  private readonly views = new Map<GPUTexture, GPUTextureView>();
 
   constructor({
     device,
@@ -37,12 +38,25 @@ export class DensityTextures {
         { width: textureSize, height: textureSize }
       );
 
+      this.views.set(texture, texture.createView());
       return texture;
     });
 
     this.readTexture = textures[0];
     this.writeTexture = textures[1];
     this.prevTexture = textures[2];
+  }
+
+  get readView() {
+    return this.views.get(this.readTexture)!;
+  }
+
+  get writeView() {
+    return this.views.get(this.writeTexture)!;
+  }
+
+  get prevView() {
+    return this.views.get(this.prevTexture)!;
   }
 
   initializeData(textureSize: number) {
