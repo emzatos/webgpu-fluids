@@ -1,0 +1,24 @@
+name: Notify Website
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger website deployment
+        env:
+          GH_TOKEN: ${{ secrets.WEBSITE_DEPLOY_TOKEN }}
+        run: |
+          gh api \
+            --method POST \
+            repos/emzatos/emzatos.github.io/dispatches \
+            -f event_type=simulation-updated \
+            -f client_payload[repository]="$GITHUB_REPOSITORY"
